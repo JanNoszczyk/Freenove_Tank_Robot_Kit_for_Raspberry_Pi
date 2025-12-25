@@ -63,13 +63,19 @@ class mywindow(QMainWindow, Ui_server_ui):
         self.right_wheel_speed = 0                     # Initialize the right wheel speed
 
         # Gamepad control state
-        self.gamepad_servo0_angle = 90                 # Camera pan angle (90-150)
-        self.gamepad_servo1_angle = 140                # Camera tilt angle (90-150)
+        self.gamepad_servo0_angle = 90                 # Clamp open/close (90=closed, 150=open)
+        self.gamepad_servo1_angle = 140                # Arm up/down (90=down, 140=up)
         self.gamepad_led_mode = 0                      # LED mode (0-5)
-        self.gamepad_last_rt_pressed = False           # Track RT trigger state for edge detection
-        self.gamepad_last_lt_pressed = False           # Track LT trigger state for edge detection
-        self.gamepad_last_y_pressed = False            # Track Y button state for edge detection
-        self.gamepad_last_a_pressed = False            # Track A button state for edge detection
+        self.gamepad_last_rt_pressed = False           # Track RT trigger for Pinch action
+        self.gamepad_last_lt_pressed = False           # Track LT trigger for Drop action
+        self.gamepad_last_y_pressed = False            # Track Y button for LED cycle
+        self.gamepad_last_a_pressed = False            # Track A button for emergency stop
+        self.gamepad_last_b_pressed = False            # Track B button for mode cycle
+        self.gamepad_last_x_pressed = False            # Track X button for home position
+        self.gamepad_last_rb_pressed = False           # Track RB for arm up
+        self.gamepad_last_lb_pressed = False           # Track LB for arm down
+        self.gamepad_pinch_active = False              # Pinch action toggle state
+        self.gamepad_drop_active = False               # Drop action toggle state
 
     def stop_car(self):
         self.led.colorWipe([0, 0, 0])                  # Turn off the LEDs
@@ -261,7 +267,7 @@ class mywindow(QMainWindow, Ui_server_ui):
     def threading_gamepad(self):
         """Main loop that reads gamepad and controls the robot."""
         MOTOR_MAX = 3000  # Max motor speed (not full 4095 for safety)
-        SERVO_SPEED = 2   # Degrees per update for camera movement
+        SERVO_SPEED = 2   # Degrees per update for arm movement
 
         while self.gamepad_thread_is_running:
             state = self.gamepad.get_state()
@@ -291,51 +297,113 @@ class mywindow(QMainWindow, Ui_server_ui):
                     self.right_wheel_speed = right_speed
                     self.car.motor.setMotorModel(left_speed, right_speed)
 
-                # === CAMERA CONTROL ===
-                # Right stick controls camera pan/tilt
+            # === ARM CONTROL (Right stick - works in free mode) ===
+            if self.car_mode == 1:
+                # Right stick X = Clamp open/close (Servo 0)
                 if abs(state.right_stick_x) > 0.1:
                     self.gamepad_servo0_angle += state.right_stick_x * SERVO_SPEED
                     self.gamepad_servo0_angle = max(90, min(150, self.gamepad_servo0_angle))
                     self.car.servo.setServoAngle(0, int(self.gamepad_servo0_angle))
 
+                # Right stick Y = Arm up/down (Servo 1)
                 if abs(state.right_stick_y) > 0.1:
                     self.gamepad_servo1_angle -= state.right_stick_y * SERVO_SPEED  # Inverted
                     self.gamepad_servo1_angle = max(90, min(150, self.gamepad_servo1_angle))
                     self.car.servo.setServoAngle(1, int(self.gamepad_servo1_angle))
 
-            # === ARM CONTROL (works in any mode) ===
-            # Right trigger = grab (clamp up)
+            # === PINCH/DROP ACTIONS (RT/LT - toggles like app checkboxes) ===
+            # RT = Toggle Pinch Object (automated grab sequence)
             rt_pressed = state.right_trigger > 0.5
             if rt_pressed and not self.gamepad_last_rt_pressed:
-                if self.car_mode != 5:  # Not already grabbing
-                    print("Gamepad: Grab (RT pressed)")
-                    self.car_mode = 5
+                if not self.gamepad_pinch_active:
+                    # Start pinch action
+                    self.gamepad_pinch_active = True
+                    self.gamepad_drop_active = False
+                    print("Gamepad: Pinch ON (RT)")
+                    self.car_mode = 5  # Triggers mode_clamp_up
+                else:
+                    # Stop pinch action
+                    self.gamepad_pinch_active = False
+                    print("Gamepad: Pinch OFF (RT)")
+                    self.car_mode = 4  # Stop action
             self.gamepad_last_rt_pressed = rt_pressed
 
-            # Left trigger = release (clamp down)
+            # LT = Toggle Drop Object (automated release sequence)
             lt_pressed = state.left_trigger > 0.5
             if lt_pressed and not self.gamepad_last_lt_pressed:
-                if self.car_mode != 6:  # Not already releasing
-                    print("Gamepad: Release (LT pressed)")
-                    self.car_mode = 6
+                if not self.gamepad_drop_active:
+                    # Start drop action
+                    self.gamepad_drop_active = True
+                    self.gamepad_pinch_active = False
+                    print("Gamepad: Drop ON (LT)")
+                    self.car_mode = 6  # Triggers mode_clamp_down
+                else:
+                    # Stop drop action
+                    self.gamepad_drop_active = False
+                    print("Gamepad: Drop OFF (LT)")
+                    self.car_mode = 4  # Stop action
             self.gamepad_last_lt_pressed = lt_pressed
 
             # === BUTTON ACTIONS ===
-            # A button = emergency stop
+            # A button = Emergency stop (stop motors, return to free mode)
             if state.button_a and not self.gamepad_last_a_pressed:
-                print("Gamepad: STOP (A pressed)")
+                print("Gamepad: STOP (A)")
                 self.car.motor.setMotorModel(0, 0)
                 self.left_wheel_speed = 0
                 self.right_wheel_speed = 0
+                self.gamepad_pinch_active = False
+                self.gamepad_drop_active = False
                 self.car_mode = 1  # Return to free mode
             self.gamepad_last_a_pressed = state.button_a
 
-            # Y button = cycle LED mode
+            # B button = Cycle robot modes (M-Free -> M-Sonic -> M-Line)
+            if state.button_b and not self.gamepad_last_b_pressed:
+                # Cycle: 1 (Free) -> 2 (Sonic) -> 3 (Line) -> 1
+                if self.car_mode == 1:
+                    self.car_mode = 2
+                    print("Gamepad: Mode = M-Sonic (B)")
+                elif self.car_mode == 2:
+                    self.car_mode = 3
+                    self.car.infrared_run_stop = False
+                    print("Gamepad: Mode = M-Line (B)")
+                else:
+                    self.car.infrared_run_stop = True
+                    time.sleep(0.1)
+                    self.car_mode = 1
+                    self.car.motor.setMotorModel(0, 0)
+                    print("Gamepad: Mode = M-Free (B)")
+                self.car_last_mode = self.car_mode
+            self.gamepad_last_b_pressed = state.button_b
+
+            # X button = Home position (reset servos to default)
+            if state.button_x and not self.gamepad_last_x_pressed:
+                print("Gamepad: HOME (X)")
+                self.gamepad_servo0_angle = 90
+                self.gamepad_servo1_angle = 140
+                self.car.servo.setServoAngle(0, 90)
+                self.car.servo.setServoAngle(1, 140)
+            self.gamepad_last_x_pressed = state.button_x
+
+            # Y button = Cycle LED mode (0-5)
             if state.button_y and not self.gamepad_last_y_pressed:
                 self.gamepad_led_mode = (self.gamepad_led_mode + 1) % 6
-                print(f"Gamepad: LED mode {self.gamepad_led_mode}")
+                print(f"Gamepad: LED mode {self.gamepad_led_mode} (Y)")
                 self.queue_led.put(f"CMD_LED#{self.gamepad_led_mode}#100#100#100#15")
             self.gamepad_last_y_pressed = state.button_y
+
+            # RB = Quick arm up (servo 1 to 90)
+            if state.button_rb and not self.gamepad_last_rb_pressed:
+                print("Gamepad: Arm UP (RB)")
+                self.gamepad_servo1_angle = 90
+                self.car.servo.setServoAngle(1, 90)
+            self.gamepad_last_rb_pressed = state.button_rb
+
+            # LB = Quick arm down (servo 1 to 150)
+            if state.button_lb and not self.gamepad_last_lb_pressed:
+                print("Gamepad: Arm DOWN (LB)")
+                self.gamepad_servo1_angle = 150
+                self.car.servo.setServoAngle(1, 150)
+            self.gamepad_last_lb_pressed = state.button_lb
 
             # Small sleep to prevent busy-waiting
             time.sleep(0.02)  # 50Hz update rate
