@@ -11,6 +11,7 @@
 #   bash PI_SETUP_COMMANDS.sh --post-reboot    # Phase 2: Post-reboot setup
 #   bash PI_SETUP_COMMANDS.sh --setup-autostart # Optional: Auto-start on boot
 #   bash PI_SETUP_COMMANDS.sh --install-client  # Optional: Install Pi client GUI
+#   bash PI_SETUP_COMMANDS.sh --arm-calibration  # Calibrate servos for arm assembly
 # =============================================================================
 
 set -e  # Exit on error
@@ -34,6 +35,35 @@ if [ "$1" == "--install-client" ]; then
     echo "[CLIENT] Complete. To run client:"
     echo "  cd ~/Freenove_Tank_Robot_Kit_for_Raspberry_Pi/Code/Client"
     echo "  sudo python Main.py"
+    exit 0
+fi
+
+# -----------------------------------------------------------------------------
+# ARM CALIBRATION: Rotate servos to 90° for arm assembly (Step 24 in manual)
+# -----------------------------------------------------------------------------
+if [ "$1" == "--arm-calibration" ]; then
+    echo ""
+    echo "[ARM] Starting servo calibration for arm assembly..."
+    echo ""
+    echo "IMPORTANT: This rotates servos to 90 degrees."
+    echo "Install arm parts WHILE this is running, then press Ctrl+C when done."
+    echo ""
+
+    cd ~/Freenove_Tank_Robot_Kit_for_Raspberry_Pi/Code/Server
+
+    # For V1.0 PCB, must start pigpiod first
+    echo "Starting pigpiod daemon..."
+    sudo killall pigpiod 2>/dev/null || true
+    sudo pigpiod
+    sleep 1
+
+    echo ""
+    echo "Running servo.py - servos will move to calibration position..."
+    echo "Press Ctrl+C when arm assembly is complete."
+    echo ""
+
+    sudo python servo.py
+
     exit 0
 fi
 
