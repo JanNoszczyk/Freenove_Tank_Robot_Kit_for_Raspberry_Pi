@@ -14,6 +14,7 @@ from command import Command                             # Import the Command cla
 from led import Led                                    # Import the Led class from the led module
 from camera import Camera                              # Import the Camera class from the camera module
 from car import Car                                    # Import the Car class from the car module
+from gamepad import Gamepad                            # Import the Gamepad class for controller support
 
 class mywindow(QMainWindow, Ui_server_ui):
     def __init__(self):
@@ -48,15 +49,27 @@ class mywindow(QMainWindow, Ui_server_ui):
         self.car_thread = None                         # Initialize the car thread
         self.led_process = None                        # Initialize the LED process
         self.action_process = None                     # Initialize the action process
+        self.gamepad_thread = None                     # Initialize the gamepad thread
         self.cmd_thread_is_running = False             # Initialize the command thread running state
         self.video_thread_is_running = False           # Initialize the video thread running state
         self.car_thread_is_running = False             # Initialize the car thread running state
         self.led_process_is_running = False            # Initialize the LED process running state
         self.action_process_is_running = False         # Initialize the action process running state
+        self.gamepad_thread_is_running = False         # Initialize the gamepad thread running state
+        self.gamepad = Gamepad(deadzone=0.15)          # Initialize gamepad with 15% deadzone
         self.car_mode = 1                              # Initialize the car mode
         self.car_last_mode = 1                         # Initialize the last car mode
         self.left_wheel_speed = 0                      # Initialize the left wheel speed
         self.right_wheel_speed = 0                     # Initialize the right wheel speed
+
+        # Gamepad control state
+        self.gamepad_servo0_angle = 90                 # Camera pan angle (90-150)
+        self.gamepad_servo1_angle = 140                # Camera tilt angle (90-150)
+        self.gamepad_led_mode = 0                      # LED mode (0-5)
+        self.gamepad_last_rt_pressed = False           # Track RT trigger state for edge detection
+        self.gamepad_last_lt_pressed = False           # Track LT trigger state for edge detection
+        self.gamepad_last_y_pressed = False            # Track Y button state for edge detection
+        self.gamepad_last_a_pressed = False            # Track A button state for edge detection
 
     def stop_car(self):
         self.led.colorWipe([0, 0, 0])                  # Turn off the LEDs
@@ -73,6 +86,7 @@ class mywindow(QMainWindow, Ui_server_ui):
             self.set_threading_video_send(True)        # Start the video send thread
             self.set_threading_car_task(True)          # Start the car task thread
             self.set_process_led_running(True)         # Start the LED process
+            self.set_threading_gamepad(True)           # Start the gamepad thread
         elif self.label.text() == 'Server On':
             self.label.setText("Server Off")           # Change the label text to "Server Off"
             self.Button_Server.setText("On")           # Change the button text to "On"
@@ -81,6 +95,7 @@ class mywindow(QMainWindow, Ui_server_ui):
             self.set_threading_video_send(False)       # Stop the video send thread
             self.set_threading_car_task(False)         # Stop the car task thread
             self.set_process_led_running(False)        # Stop the LED process
+            self.set_threading_gamepad(False)          # Stop the gamepad thread
             self.tcp_server = TankServer()             # Reinitialize the TCP server
 
     def set_threading_cmd_receive(self, state, close_time=0.3):
@@ -222,6 +237,109 @@ class mywindow(QMainWindow, Ui_server_ui):
                         print("clamp down stop")                                  # Print a message
                         break
 
+    def set_threading_gamepad(self, state, close_time=0.3):
+        """Start or stop the gamepad reading thread."""
+        if self.gamepad_thread is None:
+            buf_state = False
+        else:
+            buf_state = self.gamepad_thread.is_alive()
+        if state != buf_state:
+            if state:
+                self.gamepad_thread_is_running = True
+                self.gamepad.start()  # Start the gamepad reader
+                self.gamepad_thread = threading.Thread(target=self.threading_gamepad)
+                self.gamepad_thread.start()
+                print("Gamepad control thread started")
+            else:
+                self.gamepad_thread_is_running = False
+                self.gamepad.stop()  # Stop the gamepad reader
+                if self.gamepad_thread is not None:
+                    self.gamepad_thread.join(close_time)
+                    self.gamepad_thread = None
+                print("Gamepad control thread stopped")
+
+    def threading_gamepad(self):
+        """Main loop that reads gamepad and controls the robot."""
+        MOTOR_MAX = 3000  # Max motor speed (not full 4095 for safety)
+        SERVO_SPEED = 2   # Degrees per update for camera movement
+
+        while self.gamepad_thread_is_running:
+            state = self.gamepad.get_state()
+
+            if not state.connected:
+                time.sleep(0.1)  # Wait longer if no controller
+                continue
+
+            # Only control motors in free mode (mode 1)
+            if self.car_mode == 1:
+                # === TANK DRIVE ===
+                # Left stick controls movement
+                forward = -state.left_stick_y  # Inverted: stick up = forward
+                turn = state.left_stick_x      # Stick right = turn right
+
+                # Differential drive mixing
+                left_speed = int((forward + turn) * MOTOR_MAX)
+                right_speed = int((forward - turn) * MOTOR_MAX)
+
+                # Clamp to valid range
+                left_speed = max(-4095, min(4095, left_speed))
+                right_speed = max(-4095, min(4095, right_speed))
+
+                # Only update if changed significantly (reduce motor chatter)
+                if abs(left_speed - self.left_wheel_speed) > 50 or abs(right_speed - self.right_wheel_speed) > 50:
+                    self.left_wheel_speed = left_speed
+                    self.right_wheel_speed = right_speed
+                    self.car.motor.setMotorModel(left_speed, right_speed)
+
+                # === CAMERA CONTROL ===
+                # Right stick controls camera pan/tilt
+                if abs(state.right_stick_x) > 0.1:
+                    self.gamepad_servo0_angle += state.right_stick_x * SERVO_SPEED
+                    self.gamepad_servo0_angle = max(90, min(150, self.gamepad_servo0_angle))
+                    self.car.servo.setServoAngle(0, int(self.gamepad_servo0_angle))
+
+                if abs(state.right_stick_y) > 0.1:
+                    self.gamepad_servo1_angle -= state.right_stick_y * SERVO_SPEED  # Inverted
+                    self.gamepad_servo1_angle = max(90, min(150, self.gamepad_servo1_angle))
+                    self.car.servo.setServoAngle(1, int(self.gamepad_servo1_angle))
+
+            # === ARM CONTROL (works in any mode) ===
+            # Right trigger = grab (clamp up)
+            rt_pressed = state.right_trigger > 0.5
+            if rt_pressed and not self.gamepad_last_rt_pressed:
+                if self.car_mode != 5:  # Not already grabbing
+                    print("Gamepad: Grab (RT pressed)")
+                    self.car_mode = 5
+            self.gamepad_last_rt_pressed = rt_pressed
+
+            # Left trigger = release (clamp down)
+            lt_pressed = state.left_trigger > 0.5
+            if lt_pressed and not self.gamepad_last_lt_pressed:
+                if self.car_mode != 6:  # Not already releasing
+                    print("Gamepad: Release (LT pressed)")
+                    self.car_mode = 6
+            self.gamepad_last_lt_pressed = lt_pressed
+
+            # === BUTTON ACTIONS ===
+            # A button = emergency stop
+            if state.button_a and not self.gamepad_last_a_pressed:
+                print("Gamepad: STOP (A pressed)")
+                self.car.motor.setMotorModel(0, 0)
+                self.left_wheel_speed = 0
+                self.right_wheel_speed = 0
+                self.car_mode = 1  # Return to free mode
+            self.gamepad_last_a_pressed = state.button_a
+
+            # Y button = cycle LED mode
+            if state.button_y and not self.gamepad_last_y_pressed:
+                self.gamepad_led_mode = (self.gamepad_led_mode + 1) % 6
+                print(f"Gamepad: LED mode {self.gamepad_led_mode}")
+                self.queue_led.put(f"CMD_LED#{self.gamepad_led_mode}#100#100#100#15")
+            self.gamepad_last_y_pressed = state.button_y
+
+            # Small sleep to prevent busy-waiting
+            time.sleep(0.02)  # 50Hz update rate
+
     def set_threading_video_send(self, state, close_time=0.3):  # Method to start or stop the video sending thread
         if self.video_thread is None:                                                   # Check if the video thread is not initialized
             buf_state = False                                                           # If not, set buffer state to False
@@ -311,6 +429,7 @@ class mywindow(QMainWindow, Ui_server_ui):
         self.set_threading_video_send(False)                    # Stop the video sending thread
         self.set_threading_car_task(False)                      # Stop the car task thread
         self.set_process_led_running(False)                     # Stop the LED control process
+        self.set_threading_gamepad(False)                       # Stop the gamepad thread
         if self.tcp_server:                                     # If the TCP server is initialized
             self.tcp_server.stopTcpServer()                     # Stop the TCP server
             self.tcp_server = None                              # Clear the reference to the TCP server
@@ -321,6 +440,8 @@ class mywindow(QMainWindow, Ui_server_ui):
             self.video_thread.join(0.1)                         # Wait for the video thread to finish, with a timeout
         if self.car_thread and self.car_thread.is_alive():      # If the car thread is running
             self.car_thread.join(0.1)                           # Wait for the car thread to finish, with a timeout
+        if self.gamepad_thread and self.gamepad_thread.is_alive():  # If the gamepad thread is running
+            self.gamepad_thread.join(0.1)                       # Wait for the gamepad thread to finish, with a timeout
         if self.led_process and self.led_process.is_alive():    # If the LED process is running
             self.led_process.terminate()                        # Terminate the LED process
             self.led_process.join(0.1)                          # Wait for the LED process to finish, with a timeout

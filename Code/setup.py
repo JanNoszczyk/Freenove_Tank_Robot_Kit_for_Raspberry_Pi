@@ -149,6 +149,7 @@ def main():
         "pigpio": False,
         "gpiozero": False,
         "numpy": False,
+        "evdev": False,
         "rpi-hardware-pwm --break-system-packages": False,
         "pi-hardware-pwm (custom install)": False,
         "rpi-ws281x-python (custom install)": False
@@ -164,6 +165,7 @@ def main():
     print("Checking and installing Python packages...")
     install_status["gpiozero"] = check_and_install("gpiozero")
     install_status["numpy"] = check_and_install("numpy")
+    install_status["evdev"] = check_and_install("evdev")
     install_status["rpi-hardware-pwm --break-system-packages"] = check_and_install("rpi-hardware-pwm --break-system-packages")
     
     print("Running custom installations...")
