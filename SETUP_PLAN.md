@@ -1,15 +1,16 @@
 # Freenove Tank Robot Kit (FNK0077) - Complete Setup Plan
 
-## Hardware: Raspberry Pi 3B | PCB Version: TBD (check board)
+## Hardware: Raspberry Pi 3B | PCB Version: V1.0
 
 ---
 
 ## Phase 1: Hardware Assembly (Physical Build)
 
-### 1.1 Check PCB Version
-**ACTION REQUIRED:** Look at your PCB board for "V1.0" or "V2.0" printed on it.
-- V1.0: Uses GPIO7/8 for servos, GPIO18 for LEDs
-- V2.0: Uses GPIO12/13 for servos, GPIO10 (SPI) for LEDs
+### 1.1 PCB Version (CONFIRMED: V1.0)
+Your board uses:
+- GPIO7/8 for servos
+- GPIO18 for LEDs
+- Requires `pigpiod` daemon running before server start
 
 ### 1.2 Chassis Assembly (Steps 1-9 in manual)
 - [ ] Attach line tracking sensor to acrylic (2x M3X12 screws, 2x M3 nuts)
@@ -244,7 +245,7 @@ sudo python main.py
 | Item | Value |
 |------|-------|
 | Pi Model | Raspberry Pi 3B |
-| PCB Version | **CHECK YOUR BOARD** |
+| PCB Version | V1.0 |
 | Camera | OV5647 |
 | Server Port | 5000 (default) |
 | Video Port | 8000 (default) |
