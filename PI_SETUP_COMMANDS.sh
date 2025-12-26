@@ -75,9 +75,9 @@ if [ "$1" == "--setup-autostart" ]; then
     echo "[AUTOSTART] Setting up server auto-start..."
 
     # Create start.sh with pigpiod for V1.0 PCB
-    cat > ~/start.sh << 'STARTSH'
+    cat > ~/start.sh << STARTSH
 #!/bin/sh
-cd "/home/pi/Freenove_Tank_Robot_Kit_for_Raspberry_Pi/Code/Server"
+cd "$HOME/Freenove_Tank_Robot_Kit_for_Raspberry_Pi/Code/Server"
 pwd
 sleep 10
 # V1.0 PCB requires pigpiod daemon
@@ -92,12 +92,12 @@ STARTSH
     mkdir -p ~/.config/autostart/
 
     # Create start.desktop
-    cat > ~/.config/autostart/start.desktop << 'DESKTOP'
+    cat > ~/.config/autostart/start.desktop << DESKTOP
 [Desktop Entry]
 Type=Application
 Name=start
 NoDisplay=true
-Exec=/home/pi/start.sh
+Exec=$HOME/start.sh
 DESKTOP
 
     sudo chmod +x ~/.config/autostart/start.desktop
