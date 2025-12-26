@@ -165,7 +165,10 @@ class mywindow(QMainWindow, Ui_server_ui):
                     elif self.cmd_parser.commandString == self.command.CMD_MOTOR:
                         self.left_wheel_speed = int(self.cmd_parser.intParameter[0])                 # Get the left wheel speed
                         self.right_wheel_speed = int(self.cmd_parser.intParameter[1])                # Get the right wheel speed
-                        self.car.motor.setMotorModel(self.left_wheel_speed, self.right_wheel_speed)  # Set the motor model
+                        # Apply LiDAR limit (forward = both speeds positive)
+                        is_forward = self.left_wheel_speed > 0 and self.right_wheel_speed > 0
+                        limited_left, limited_right = self._apply_lidar_limit(self.left_wheel_speed, self.right_wheel_speed, is_forward)
+                        self.car.motor.setMotorModel(limited_left, limited_right)                    # Set the motor model
                     elif self.cmd_parser.commandString == self.command.CMD_MODE:
                         if self.car.infrared_run_stop == False:   
                             self.car.infrared_run_stop = True       # Set the infrared run stop state
@@ -297,6 +300,33 @@ class mywindow(QMainWindow, Ui_server_ui):
                     self._lidar_thread = None
                 print("LiDAR thread stopped")
 
+    def _apply_lidar_limit(self, left_speed, right_speed, is_forward):
+        """Apply LiDAR-based speed limiting for obstacle avoidance.
+
+        Args:
+            left_speed: Left motor speed (-4095 to 4095)
+            right_speed: Right motor speed (-4095 to 4095)
+            is_forward: True if robot is moving forward
+
+        Returns:
+            Tuple of (left_speed, right_speed) after applying limits
+        """
+        if not is_forward or not self._lidar_available:
+            return left_speed, right_speed
+
+        with self._lidar_lock:
+            dist = self._lidar_distance
+
+        if dist <= 0:          # Fail-safe or error
+            return 0, 0
+        elif dist < 10:        # STOP zone
+            return 0, 0
+        elif dist < 40:        # SLOW zone (linear scaling)
+            scale = dist / 40.0
+            return int(left_speed * scale), int(right_speed * scale)
+        else:                  # dist >= 40, full speed
+            return left_speed, right_speed
+
     def threading_lidar(self):
         """Read LiDAR at 20Hz, update shared distance variable."""
         # Initialize sensor
@@ -338,8 +368,10 @@ class mywindow(QMainWindow, Ui_server_ui):
         MOTOR_BASE = 3000  # Base motor speed (not full 4095 for safety)
         SPEED_MULTIPLIERS = [0.25, 0.50, 0.75, 1.0, 1.25]  # Speed levels 0-4
         SERVO_SPEED = 2   # Degrees per update for arm movement
+        LOOP_INTERVAL = 0.02  # 50Hz target
 
         while self.gamepad_thread_is_running:
+            loop_start = time.monotonic()
             state = self.gamepad.get_state()
 
             if not state.connected:
@@ -376,21 +408,7 @@ class mywindow(QMainWindow, Ui_server_ui):
                 right_speed = max(-4095, min(4095, right_speed))
 
                 # Apply obstacle speed limiting (forward only)
-                if forward > 0 and self._lidar_available:
-                    with self._lidar_lock:
-                        dist = self._lidar_distance
-
-                    if dist <= 0:          # Fail-safe or error
-                        left_speed = 0
-                        right_speed = 0
-                    elif dist < 10:        # STOP zone
-                        left_speed = 0
-                        right_speed = 0
-                    elif dist < 40:        # SLOW zone (linear)
-                        scale = dist / 40.0
-                        left_speed = int(left_speed * scale)
-                        right_speed = int(right_speed * scale)
-                    # else: dist >= 40, full speed (no change)
+                left_speed, right_speed = self._apply_lidar_limit(left_speed, right_speed, forward > 0)
 
                 # Only update if changed significantly (reduce motor chatter)
                 if abs(left_speed - self.left_wheel_speed) > 50 or abs(right_speed - self.right_wheel_speed) > 50:
@@ -529,8 +547,10 @@ class mywindow(QMainWindow, Ui_server_ui):
                 self.queue_led.put("CMD_LED#0#0#0#0#0")
             self.gamepad_last_home_pressed = state.button_home
 
-            # Small sleep to prevent busy-waiting
-            time.sleep(0.02)  # 50Hz update rate
+            # Time-based loop scheduling for consistent 50Hz update rate
+            elapsed = time.monotonic() - loop_start
+            sleep_time = max(0, LOOP_INTERVAL - elapsed)
+            time.sleep(sleep_time)
 
     def set_threading_video_send(self, state, close_time=0.3):  # Method to start or stop the video sending thread
         if self.video_thread is None:                                                   # Check if the video thread is not initialized

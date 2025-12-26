@@ -21,7 +21,7 @@ class TFMiniS:
             print("TFMiniS: pyserial not available")
             return False
         try:
-            self.ser = serial.Serial(self.port, 115200, timeout=0.1)
+            self.ser = serial.Serial(self.port, 115200, timeout=0.04)
             self.ser.reset_input_buffer()
             print(f"TFMiniS: Connected on {self.port}")
             return True
@@ -41,8 +41,12 @@ class TFMiniS:
                     dist = data[2] + (data[3] << 8)
                     if 10 <= dist <= 1200:
                         return dist
-        except Exception:
-            pass
+        except Exception as e:
+            # Log unique errors only (avoid spam)
+            error_str = str(e)
+            if not hasattr(self, '_last_read_error') or self._last_read_error != error_str:
+                print(f"TFMiniS: Read error - {error_str}")
+                self._last_read_error = error_str
         return -1
 
     def close(self):
@@ -50,8 +54,8 @@ class TFMiniS:
         if self.ser:
             try:
                 self.ser.close()
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"TFMiniS: Close error - {e}")
             self.ser = None
             print("TFMiniS: Disconnected")
 
