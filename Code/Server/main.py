@@ -397,7 +397,7 @@ class mywindow(QMainWindow, Ui_server_ui):
                 # === TANK DRIVE ===
                 # Left stick controls movement
                 forward = -state.left_stick_y  # Inverted: stick up = forward
-                turn = state.left_stick_x      # Stick right = turn right
+                turn = -state.left_stick_x     # Inverted: stick right = turn right
 
                 # Differential drive mixing
                 left_speed = int((forward + turn) * motor_max)
