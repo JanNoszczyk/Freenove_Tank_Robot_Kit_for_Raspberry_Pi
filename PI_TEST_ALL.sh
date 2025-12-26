@@ -25,16 +25,17 @@ echo "Select a test to run:"
 echo "  1) LED test       - Color patterns cycle"
 echo "  2) Motor test     - Forward/back/left/right"
 echo "  3) Servo test     - Arm opens/closes"
-echo "  4) Ultrasonic     - Distance readings"
+echo "  4) Ultrasonic     - Distance readings (HC-SR04)"
 echo "  5) Infrared       - Line sensor readings"
 echo "  6) Camera test    - Saves image.jpg"
-echo "  7) Sonic mode     - Obstacle avoidance (standalone)"
-echo "  8) Line tracking  - Follow line (standalone)"
-echo "  9) Start server   - Full server with gamepad"
+echo "  7) Lidar test     - Distance readings (TF-Mini S)"
+echo "  8) Sonic mode     - Obstacle avoidance (standalone)"
+echo "  9) Line tracking  - Follow line (standalone)"
+echo " 10) Start server   - Full server with gamepad"
 echo "  0) Exit"
 echo ""
 
-read -p "Enter choice [0-9]: " choice
+read -p "Enter choice [0-10]: " choice
 
 case $choice in
     1)
@@ -63,14 +64,19 @@ case $choice in
         echo "Image saved to image.jpg"
         ;;
     7)
+        echo "Running Lidar test... (Ctrl+C to stop)"
+        echo "NOTE: Requires TF-Mini S sensor connected via USB-UART"
+        sudo python test.py Lidar
+        ;;
+    8)
         echo "Running Sonic obstacle avoidance... (Ctrl+C to stop)"
         sudo python car.py Sonic
         ;;
-    8)
+    9)
         echo "Running Line tracking mode... (Ctrl+C to stop)"
         sudo python car.py Infrared
         ;;
-    9)
+    10)
         echo "Starting server with gamepad support..."
         echo "Plug in USB dongle BEFORE pressing Enter!"
         read -p "Press Enter to start..."
