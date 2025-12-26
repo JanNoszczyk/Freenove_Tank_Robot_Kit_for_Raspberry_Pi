@@ -40,6 +40,7 @@ class GamepadState:
     button_rb: bool = False     # Right bumper
     button_start: bool = False  #
     button_select: bool = False #
+    button_home: bool = False   # Center home/guide button
 
     # D-Pad
     dpad_x: int = 0  # -1 = left, 0 = center, 1 = right
@@ -85,6 +86,7 @@ class Gamepad:
     BTN_RB = ecodes.BTN_TR if EVDEV_AVAILABLE else 311
     BTN_SELECT = ecodes.BTN_SELECT if EVDEV_AVAILABLE else 314
     BTN_START = ecodes.BTN_START if EVDEV_AVAILABLE else 315
+    BTN_HOME = ecodes.BTN_MODE if EVDEV_AVAILABLE else 316
 
     def __init__(self, deadzone: float = 0.1):
         """
@@ -226,6 +228,8 @@ class Gamepad:
                                 self._state.button_start = pressed
                             elif event.code == self.BTN_SELECT:
                                 self._state.button_select = pressed
+                            elif event.code == self.BTN_HOME:
+                                self._state.button_home = pressed
 
             except OSError:
                 # Device disconnected
@@ -276,6 +280,7 @@ class Gamepad:
                 button_rb=self._state.button_rb,
                 button_start=self._state.button_start,
                 button_select=self._state.button_select,
+                button_home=self._state.button_home,
                 dpad_x=self._state.dpad_x,
                 dpad_y=self._state.dpad_y,
                 connected=self._state.connected
