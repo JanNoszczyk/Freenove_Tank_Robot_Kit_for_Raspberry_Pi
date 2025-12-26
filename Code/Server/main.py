@@ -510,23 +510,11 @@ class mywindow(QMainWindow, Ui_server_ui):
                 self.car_mode = 1  # Return to free mode
             self.gamepad_last_a_pressed = state.button_a
 
-            # B button = Cycle robot modes (M-Free -> M-Sonic -> M-Line)
+            # B button = LEDs off
             if state.button_b and not self.gamepad_last_b_pressed:
-                # Cycle: 1 (Free) -> 2 (Sonic) -> 3 (Line) -> 1
-                if self.car_mode == 1:
-                    self.car_mode = 2
-                    print("Gamepad: Mode = M-Sonic (B)")
-                elif self.car_mode == 2:
-                    self.car_mode = 3
-                    self.car.infrared_run_stop = False
-                    print("Gamepad: Mode = M-Line (B)")
-                else:
-                    self.car.infrared_run_stop = True
-                    time.sleep(0.1)
-                    self.car_mode = 1
-                    self.car.motor.setMotorModel(0, 0)
-                    print("Gamepad: Mode = M-Free (B)")
-                self.car_last_mode = self.car_mode
+                print("Gamepad: LEDs OFF (B)")
+                self.gamepad_led_mode = 0
+                self.queue_led.put("CMD_LED#0#0#0#0#0")
             self.gamepad_last_b_pressed = state.button_b
 
             # X button = Home position (reset servos to default)
@@ -538,10 +526,14 @@ class mywindow(QMainWindow, Ui_server_ui):
                 self.car.servo.setServoAngle(1, 140)
             self.gamepad_last_x_pressed = state.button_x
 
-            # Y button = Cycle LED mode (0-5)
+            # Y button = Cycle LED patterns (1-5, use B for off)
             if state.button_y and not self.gamepad_last_y_pressed:
-                self.gamepad_led_mode = (self.gamepad_led_mode + 1) % 6
-                print(f"Gamepad: LED mode {self.gamepad_led_mode} (Y)")
+                # Cycle through patterns 1-5, skip 0 (use B button for off)
+                if self.gamepad_led_mode < 1 or self.gamepad_led_mode >= 5:
+                    self.gamepad_led_mode = 1
+                else:
+                    self.gamepad_led_mode += 1
+                print(f"Gamepad: LED pattern {self.gamepad_led_mode} (Y)")
                 self.queue_led.put(f"CMD_LED#{self.gamepad_led_mode}#100#100#100#15")
             self.gamepad_last_y_pressed = state.button_y
 
