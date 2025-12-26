@@ -369,14 +369,46 @@ class mywindow(QMainWindow, Ui_server_ui):
         SPEED_MULTIPLIERS = [0.25, 0.50, 0.75, 1.0, 1.25]  # Speed levels 0-4
         SERVO_SPEED = 2   # Degrees per update for arm movement
         LOOP_INTERVAL = 0.02  # 50Hz target
+        was_connected = False  # Track connection state for disconnect detection
 
         while self.gamepad_thread_is_running:
             loop_start = time.monotonic()
             state = self.gamepad.get_state()
 
             if not state.connected:
+                # Stop motors immediately when controller disconnects
+                if was_connected:
+                    print("Gamepad: Disconnected - stopping motors")
+                    self.left_wheel_speed = 0
+                    self.right_wheel_speed = 0
+                    self.car.motor.setMotorModel(0, 0)
+                    was_connected = False
                 time.sleep(0.1)  # Wait longer if no controller
                 continue
+
+            # Controller just connected - reset all state
+            if not was_connected:
+                print("Gamepad: Connected - resetting state")
+                was_connected = True
+                # Reset motor state
+                self.left_wheel_speed = 0
+                self.right_wheel_speed = 0
+                self.car.motor.setMotorModel(0, 0)
+                # Reset button tracking to prevent false triggers
+                self.gamepad_last_rt_pressed = False
+                self.gamepad_last_lt_pressed = False
+                self.gamepad_last_y_pressed = False
+                self.gamepad_last_a_pressed = False
+                self.gamepad_last_b_pressed = False
+                self.gamepad_last_x_pressed = False
+                self.gamepad_last_rb_pressed = False
+                self.gamepad_last_lb_pressed = False
+                self.gamepad_last_home_pressed = False
+                self.gamepad_last_dpad_y = 0
+                # Ensure free mode for manual control
+                self.car_mode = 1
+                self.gamepad_pinch_active = False
+                self.gamepad_drop_active = False
 
             # === D-PAD SPEED CONTROL ===
             # D-pad Up = increase speed, D-pad Down = decrease speed
@@ -411,7 +443,10 @@ class mywindow(QMainWindow, Ui_server_ui):
                 left_speed, right_speed = self._apply_lidar_limit(left_speed, right_speed, forward > 0)
 
                 # Only update if changed significantly (reduce motor chatter)
-                if abs(left_speed - self.left_wheel_speed) > 50 or abs(right_speed - self.right_wheel_speed) > 50:
+                # BUT always update if stopping (both speeds are 0) to ensure motors stop
+                should_stop = (left_speed == 0 and right_speed == 0)
+                significant_change = abs(left_speed - self.left_wheel_speed) > 50 or abs(right_speed - self.right_wheel_speed) > 50
+                if should_stop or significant_change:
                     self.left_wheel_speed = left_speed
                     self.right_wheel_speed = right_speed
                     self.car.motor.setMotorModel(left_speed, right_speed)
