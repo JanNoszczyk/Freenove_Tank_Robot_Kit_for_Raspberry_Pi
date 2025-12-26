@@ -34,6 +34,9 @@ except ImportError:
     print("AI Mode not available. Install: pip install google-adk google-genai python-dotenv pyaudio")
 
 class mywindow(QMainWindow,Ui_Client):
+    sig_sonic = pyqtSignal(str)
+    sig_pinch = pyqtSignal(bool)
+
     def __init__(self):
         global timer
         super(mywindow,self).__init__()
@@ -79,6 +82,8 @@ class mywindow(QMainWindow,Ui_Client):
         self.color_blue =  [100, 94, 142, 120, 255, 255]
 
         self.setFocusPolicy(Qt.StrongFocus)
+        self.sig_sonic.connect(lambda val: self.Ultrasonic.setText('Obstruction:%s cm'%val))
+        self.sig_pinch.connect(self.checkBox_Pinch_Object.setChecked)
         self.name.setAlignment(QtCore.Qt.AlignCenter)
         self.label_Servo1.setText('90')
         self.label_Servo2.setText('140')
@@ -450,6 +455,9 @@ class mywindow(QMainWindow,Ui_Client):
                 self.Key_D=True
 
     def closeEvent(self, event):
+        # Stop AI mode first if available
+        if AI_MODE_AVAILABLE:
+            self.stop_ai_mode()
         self.timer.stop()
         try:
             stop_thread(self.recv)
@@ -900,10 +908,10 @@ class mywindow(QMainWindow,Ui_Client):
 
                     Massage=oneCmd.split("#")
                     if cmd.CMD_SONIC in Massage:
-                        self.Ultrasonic.setText('Obstruction:%s cm'%Massage[1])
+                        self.sig_sonic.emit(Massage[1])
                     elif cmd.CMD_ACTION in Massage:
                         if Massage[1]=='10':
-                            self.checkBox_Pinch_Object.setChecked(False)
+                            self.sig_pinch.emit(False)
                         elif Massage[1] == '20':
                             self.checkBox_Drop_Object.setChecked(False)
 

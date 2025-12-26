@@ -259,23 +259,25 @@ _robot_brain: Optional[Agent] = None
 _brain_runner: Optional[Runner] = None
 _brain_session_service: Optional[InMemorySessionService] = None
 _brain_session_id: Optional[str] = None
+_brain_lock = asyncio.Lock()
 
 async def _ensure_brain_async():
     """Initialize Robot Brain agent and create session (async for proper session creation)."""
     global _robot_brain, _brain_runner, _brain_session_service, _brain_session_id
-    if _robot_brain is None:
-        _robot_brain = Agent(model="gemini-3-flash-preview", name="robot_brain",
-                             instruction=ROBOT_BRAIN_INSTRUCTION, tools=ROBOT_TOOLS)
-        _brain_session_service = InMemorySessionService()
-        _brain_runner = Runner(agent=_robot_brain, app_name="robot_brain",
-                               session_service=_brain_session_service)
-        # Create session explicitly per ADK docs
-        session = await _brain_session_service.create_session(
-            app_name="robot_brain",
-            user_id="user",
-            state={}  # Initial state (can be used for context)
-        )
-        _brain_session_id = session.id
+    async with _brain_lock:
+        if _robot_brain is None:
+            _robot_brain = Agent(model="gemini-3-flash-preview", name="robot_brain",
+                                 instruction=ROBOT_BRAIN_INSTRUCTION, tools=ROBOT_TOOLS)
+            _brain_session_service = InMemorySessionService()
+            _brain_runner = Runner(agent=_robot_brain, app_name="robot_brain",
+                                   session_service=_brain_session_service)
+            # Create session explicitly per ADK docs
+            session = await _brain_session_service.create_session(
+                app_name="robot_brain",
+                user_id="user",
+                state={}  # Initial state (can be used for context)
+            )
+            _brain_session_id = session.id
 
 # ============================================================
 # robot_command() - Sensor Injection + Emergency Fast-Path
@@ -388,6 +390,8 @@ class AIModeSession(QObject):
         self._recording = False
         self._pyaudio = None
         self._stream = None
+        self._stop_event = threading.Event()
+        self._record_thread = None
 
     def initialize(self) -> bool:
         """Initialize API and audio."""
@@ -413,13 +417,18 @@ class AIModeSession(QObject):
         self._set_state("listening")
         self._audio_buffer = []
         self._recording = True
-        threading.Thread(target=self._record_audio, daemon=True).start()
+        self._stop_event.clear()
+        self._record_thread = threading.Thread(target=self._record_audio, daemon=True)
+        self._record_thread.start()
 
     def stop_listening(self):
         """[FIX #1] Stop recording and process when button released."""
         if self.state != "listening":
             return
+        self._stop_event.set()
         self._recording = False
+        if self._record_thread:
+            self._record_thread.join(timeout=1.0)
         self._set_state("thinking")
         threading.Thread(target=self._process_audio, daemon=True).start()
 
@@ -428,7 +437,8 @@ class AIModeSession(QObject):
         self.state_changed.emit(state)  # [FIX #3] Qt signal (thread-safe)
 
     def _record_audio(self):
-        """Record audio until _recording is False."""
+        """Record audio until stop event is set."""
+        stream = None
         try:
             import pyaudio
             stream = self._pyaudio.open(
@@ -438,13 +448,20 @@ class AIModeSession(QObject):
                 input=True,
                 frames_per_buffer=1024
             )
-            while self._recording:
+            self._stream = stream
+            while not self._stop_event.is_set():
                 self._audio_buffer.append(stream.read(1024, exception_on_overflow=False))
-            stream.stop_stream()
-            stream.close()
         except Exception as e:
             print(f"Audio recording error: {e}")
             self._set_state("ready")
+        finally:
+            if stream:
+                try:
+                    stream.stop_stream()
+                    stream.close()
+                except Exception:
+                    pass
+            self._stream = None
 
     def _emit_transcript(self, role: str, text: str):
         """Thread-safe emit of transcript messages."""
@@ -526,6 +543,14 @@ class AIModeSession(QObject):
                 )
             )
 
+            # Validate response (may be empty or safety-blocked)
+            if not tts_response.candidates:
+                print("TTS: No candidates returned")
+                return
+            if not tts_response.candidates[0].content or not tts_response.candidates[0].content.parts:
+                print("TTS: Empty or blocked response")
+                return
+
             # Extract audio data (24kHz PCM)
             audio_data = tts_response.candidates[0].content.parts[0].inline_data.data
 
@@ -547,7 +572,15 @@ class AIModeSession(QObject):
 
     def stop(self):
         """Stop AI Mode and cleanup."""
+        self._stop_event.set()
         self._recording = False
+        if self._stream:
+            try:
+                self._stream.stop_stream()
+                self._stream.close()
+            except Exception:
+                pass
+            self._stream = None
         self._set_state("ready")
         if self._pyaudio:
             self._pyaudio.terminate()
