@@ -60,7 +60,7 @@ def _pcm_to_wav(pcm_data: bytes) -> bytes:
 
 # TTS voice configuration
 TTS_VOICE = "Puck"  # Options: Puck, Charon, Kore, Fenrir, Aoede
-TTS_MODEL = "gemini-2.5-flash-preview-tts"
+TTS_MODEL = "gemini-2.0-flash-exp"  # Supports audio output
 
 # Global genai client - initialized in AIModeSession.initialize()
 _genai_client = None
@@ -266,7 +266,7 @@ async def _ensure_brain_async():
     global _robot_brain, _brain_runner, _brain_session_service, _brain_session_id
     async with _brain_lock:
         if _robot_brain is None:
-            _robot_brain = Agent(model="gemini-3-flash-preview", name="robot_brain",
+            _robot_brain = Agent(model="gemini-2.0-flash-exp", name="robot_brain",
                                  instruction=ROBOT_BRAIN_INSTRUCTION, tools=ROBOT_TOOLS)
             _brain_session_service = InMemorySessionService()
             _brain_runner = Runner(agent=_robot_brain, app_name="robot_brain",
@@ -491,9 +491,9 @@ class AIModeSession(QObject):
             pcm_bytes = b''.join(self._audio_buffer)
             wav_bytes = _pcm_to_wav(pcm_bytes)
 
-            # Step 1: STT - Transcribe audio with Gemini 2.5 Flash
+            # Step 1: STT - Transcribe audio with Gemini 2.0 Flash
             stt_response = _genai_client.models.generate_content(
-                model="gemini-2.5-flash-preview",
+                model="gemini-2.0-flash-exp",
                 contents=[
                     "Transcribe this audio exactly. Return only the transcription.",
                     types.Part.from_bytes(data=wav_bytes, mime_type="audio/wav")

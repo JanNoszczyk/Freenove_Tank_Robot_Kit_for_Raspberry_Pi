@@ -6,7 +6,7 @@ import socket
 import os
 import io
 import time
-import imghdr
+# import imghdr  # Removed: unused and deprecated in Python 3.13
 import sys
 from threading import Timer
 from threading import Thread
@@ -26,12 +26,15 @@ from PyQt5.QtWidgets import *
 from PyQt5.QtGui import *
 
 # AI Mode imports
+import sys
 try:
     from ai_mode import AIModeSession, set_tcp_client, set_video_frame, parse_robot_message
     AI_MODE_AVAILABLE = True
-except ImportError:
+    print(f"AI Mode loaded successfully!", flush=True)
+except ImportError as e:
     AI_MODE_AVAILABLE = False
-    print("AI Mode not available. Install: pip install google-adk google-genai python-dotenv pyaudio")
+    print(f"AI Mode not available: {e}", flush=True)
+    print("Install: pip install google-adk google-genai python-dotenv pyaudio", flush=True)
 
 class mywindow(QMainWindow,Ui_Client):
     sig_sonic = pyqtSignal(str)
@@ -724,10 +727,14 @@ class mywindow(QMainWindow,Ui_Client):
                 self.TCP.sendData(cmd.CMD_MODE+self.intervalChar+'2'+self.endChar)
         elif Mode.text() == "M-AI":
             if Mode.isChecked() == True:
+                print(f"M-AI clicked! AI_MODE_AVAILABLE={AI_MODE_AVAILABLE}", flush=True)
                 self.ai_panel.setVisible(True)
                 if not self.start_ai_mode():
+                    print("start_ai_mode() returned False - falling back to M-Free", flush=True)
                     self.Btn_Mode1.setChecked(True)  # Fall back to M-Free
                     self.ai_panel.setVisible(False)
+                else:
+                    print("AI Mode started successfully!", flush=True)
 
     # === PUSH-TO-TALK VOICE CONTROL ===
 
@@ -792,10 +799,14 @@ class mywindow(QMainWindow,Ui_Client):
 
     def start_ai_mode(self):
         """Start AI Mode - ADK agent with Gemini STT/TTS."""
+        print(f"start_ai_mode: AI_MODE_AVAILABLE={AI_MODE_AVAILABLE}, ai_session={self.ai_session}", flush=True)
         if not AI_MODE_AVAILABLE:
+            print("AI Mode not available - imports failed", flush=True)
             return False
-        if not self.ai_session.initialize():
-            print("Failed to initialize AI Mode. Check .env for GOOGLE_API_KEY")
+        init_result = self.ai_session.initialize()
+        print(f"ai_session.initialize() returned: {init_result}", flush=True)
+        if not init_result:
+            print("Failed to initialize AI Mode. Check .env for GOOGLE_API_KEY", flush=True)
             return False
 
         # Connect Qt signals (thread-safe UI updates)
