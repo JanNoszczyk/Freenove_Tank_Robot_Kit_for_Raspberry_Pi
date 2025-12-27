@@ -4,10 +4,10 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { useRobotStore } from '@/stores/robotStore'
 import { useSensors } from '@/hooks/useSensors'
-import { Radar, RefreshCw } from 'lucide-react'
+import { Radar, RefreshCw, Hand } from 'lucide-react'
 
 export function SensorDisplay() {
-  const { connected, ultrasonicDistance } = useRobotStore()
+  const { connected, ultrasonicDistance, gripperStatus } = useRobotStore()
   const { requestUltrasonic } = useSensors()
 
   // Request ultrasonic reading periodically when connected
@@ -26,6 +26,20 @@ export function SensorDisplay() {
     if (ultrasonicDistance < 20) return 'destructive'
     if (ultrasonicDistance < 50) return 'default'
     return 'success'
+  }
+
+  const getGripperColor = () => {
+    if (!gripperStatus) return 'secondary'
+    if (gripperStatus === 'up_complete') return 'success'
+    if (gripperStatus === 'down_complete') return 'default'
+    return 'secondary' // stopped
+  }
+
+  const formatGripperStatus = () => {
+    if (!gripperStatus) return 'N/A'
+    if (gripperStatus === 'up_complete') return 'Closed'
+    if (gripperStatus === 'down_complete') return 'Open'
+    return 'Stopped'
   }
 
   return (
@@ -60,6 +74,17 @@ export function SensorDisplay() {
         {ultrasonicDistance !== null && ultrasonicDistance < 20 && (
           <p className="text-xs text-destructive">Warning: Obstacle nearby!</p>
         )}
+
+        {/* Gripper Status */}
+        <div className="flex items-center justify-between">
+          <span className="text-sm flex items-center gap-1">
+            <Hand className="h-3 w-3" />
+            Gripper
+          </span>
+          <Badge variant={getGripperColor()}>
+            {formatGripperStatus()}
+          </Badge>
+        </div>
       </CardContent>
     </Card>
   )

@@ -58,6 +58,7 @@ export function MovementControls() {
             onPointerUp={handlePointerUp}
             onPointerLeave={handlePointerUp}
             className="touch-none"
+            aria-label="Forward"
           >
             <ArrowUp className="h-6 w-6" />
           </Button>
@@ -72,6 +73,7 @@ export function MovementControls() {
             onPointerUp={handlePointerUp}
             onPointerLeave={handlePointerUp}
             className="touch-none"
+            aria-label="Turn Left"
           >
             <ArrowLeft className="h-6 w-6" />
           </Button>
@@ -80,6 +82,7 @@ export function MovementControls() {
             variant="destructive"
             disabled={!connected}
             onClick={handleStop}
+            aria-label="Stop"
           >
             <Square className="h-6 w-6" />
           </Button>
@@ -91,6 +94,7 @@ export function MovementControls() {
             onPointerUp={handlePointerUp}
             onPointerLeave={handlePointerUp}
             className="touch-none"
+            aria-label="Turn Right"
           >
             <ArrowRight className="h-6 w-6" />
           </Button>
@@ -105,6 +109,7 @@ export function MovementControls() {
             onPointerUp={handlePointerUp}
             onPointerLeave={handlePointerUp}
             className="touch-none"
+            aria-label="Backward"
           >
             <ArrowDown className="h-6 w-6" />
           </Button>

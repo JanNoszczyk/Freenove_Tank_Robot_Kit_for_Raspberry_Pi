@@ -1,33 +1,52 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useCallback } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { ScrollArea } from '@/components/ui/scroll-area'
 import { Badge } from '@/components/ui/badge'
 import { useRobotStore } from '@/stores/robotStore'
 import { Mic, MicOff, Bot } from 'lucide-react'
+
+const MAX_RECONNECT_DELAY = 10000 // 10 seconds max
+const INITIAL_RECONNECT_DELAY = 1000 // 1 second
 
 export function AIChat() {
   const { connected, mode, aiState, aiTranscript, setAiState, addAiMessage } = useRobotStore()
   const wsRef = useRef<WebSocket | null>(null)
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const chunksRef = useRef<Blob[]>([])
-  const scrollRef = useRef<HTMLDivElement>(null)
+  const scrollContainerRef = useRef<HTMLDivElement>(null)
+  const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const reconnectDelayRef = useRef(INITIAL_RECONNECT_DELAY)
   const [error, setError] = useState<string | null>(null)
 
   const isAIMode = mode === 3
 
-  // Connect WebSocket when in AI mode
-  useEffect(() => {
-    if (!connected || !isAIMode) {
-      if (wsRef.current) {
-        wsRef.current.close()
-        wsRef.current = null
-      }
-      return
+  const playAudio = useCallback(async (base64Data: string) => {
+    try {
+      // TTS returns WAV audio
+      const response = await fetch(`data:audio/wav;base64,${base64Data}`)
+      const blob = await response.blob()
+      const url = URL.createObjectURL(blob)
+      const audio = new Audio(url)
+      audio.onended = () => URL.revokeObjectURL(url)
+      await audio.play()
+    } catch (e) {
+      console.error('Failed to play audio:', e)
     }
+  }, [])
+
+  // Use ref for reconnection to avoid circular dependency
+  const connectAIRef = useRef<() => void>(() => {})
+
+  const connectAI = useCallback(() => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) return
 
     const ws = new WebSocket(`ws://${window.location.host}/ws/ai`)
     wsRef.current = ws
+
+    ws.onopen = () => {
+      reconnectDelayRef.current = INITIAL_RECONNECT_DELAY
+      setError(null)
+    }
 
     ws.onmessage = (event) => {
       try {
@@ -52,34 +71,66 @@ export function AIChat() {
     }
 
     ws.onclose = () => {
+      wsRef.current = null
       setAiState('idle')
+      // Only reconnect if still in AI mode and connected
+      const state = useRobotStore.getState()
+      if (state.connected && state.mode === 3) {
+        reconnectTimeoutRef.current = setTimeout(() => {
+          reconnectDelayRef.current = Math.min(
+            reconnectDelayRef.current * 2,
+            MAX_RECONNECT_DELAY
+          )
+          connectAIRef.current()
+        }, reconnectDelayRef.current)
+      }
     }
+  }, [setAiState, addAiMessage, playAudio])
+
+  // Keep ref in sync (must be in useEffect to avoid "cannot update ref during render")
+  useEffect(() => {
+    connectAIRef.current = connectAI
+  }, [connectAI])
+
+  // Connect WebSocket when in AI mode
+  useEffect(() => {
+    if (!connected || !isAIMode) {
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current)
+        reconnectTimeoutRef.current = null
+      }
+      if (wsRef.current) {
+        wsRef.current.close()
+        wsRef.current = null
+      }
+      reconnectDelayRef.current = INITIAL_RECONNECT_DELAY
+      return
+    }
+
+    connectAI()
 
     return () => {
-      ws.close()
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current)
+        reconnectTimeoutRef.current = null
+      }
+      if (wsRef.current) {
+        wsRef.current.close()
+        wsRef.current = null
+      }
     }
-  }, [connected, isAIMode, setAiState, addAiMessage])
+  }, [connected, isAIMode, connectAI])
 
   // Scroll to bottom on new messages
-  useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+  const scrollToBottom = useCallback(() => {
+    if (scrollContainerRef.current) {
+      scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight
     }
-  }, [aiTranscript])
+  }, [])
 
-  const playAudio = async (base64Data: string) => {
-    try {
-      // TTS returns WAV audio
-      const response = await fetch(`data:audio/wav;base64,${base64Data}`)
-      const blob = await response.blob()
-      const url = URL.createObjectURL(blob)
-      const audio = new Audio(url)
-      audio.onended = () => URL.revokeObjectURL(url)
-      await audio.play()
-    } catch (e) {
-      console.error('Failed to play audio:', e)
-    }
-  }
+  useEffect(() => {
+    scrollToBottom()
+  }, [aiTranscript, scrollToBottom])
 
   const startRecording = async () => {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
@@ -171,7 +222,10 @@ export function AIChat() {
         </div>
       </CardHeader>
       <CardContent className="flex-1 flex flex-col gap-3 min-h-0">
-        <ScrollArea className="flex-1 border rounded-md p-2" ref={scrollRef}>
+        <div
+          ref={scrollContainerRef}
+          className="flex-1 border rounded-md p-2 overflow-y-auto max-h-64"
+        >
           {aiTranscript.length === 0 ? (
             <p className="text-sm text-muted-foreground text-center py-4">
               Hold the button to talk to the AI assistant
@@ -195,7 +249,7 @@ export function AIChat() {
               ))}
             </div>
           )}
-        </ScrollArea>
+        </div>
 
         {error && <p className="text-sm text-destructive">{error}</p>}
 

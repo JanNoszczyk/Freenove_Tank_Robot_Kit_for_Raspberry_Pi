@@ -31,7 +31,9 @@ interface RobotState {
 
   // Sensors
   ultrasonicDistance: number | null
+  gripperStatus: string | null
   setUltrasonicDistance: (distance: number | null) => void
+  setGripperStatus: (status: string | null) => void
 
   // AI Mode
   aiState: 'idle' | 'listening' | 'thinking' | 'speaking'
@@ -58,8 +60,8 @@ export const useRobotStore = create<RobotState>((set) => ({
   setServo1Angle: (servo1Angle) => set({ servo1Angle }),
   setServo2Angle: (servo2Angle) => set({ servo2Angle }),
 
-  // LEDs
-  ledMask: 0,
+  // LEDs (mask 15 = all LEDs selected)
+  ledMask: 15,
   ledR: 255,
   ledG: 0,
   ledB: 0,
@@ -72,13 +74,19 @@ export const useRobotStore = create<RobotState>((set) => ({
 
   // Sensors
   ultrasonicDistance: null,
+  gripperStatus: null,
   setUltrasonicDistance: (ultrasonicDistance) => set({ ultrasonicDistance }),
+  setGripperStatus: (gripperStatus) => set({ gripperStatus }),
 
   // AI Mode
   aiState: 'idle',
   aiTranscript: [],
   setAiState: (aiState) => set({ aiState }),
   addAiMessage: (role, text) =>
-    set((state) => ({ aiTranscript: [...state.aiTranscript, { role, text }] })),
+    set((state) => {
+      const newTranscript = [...state.aiTranscript, { role, text }]
+      // Limit to last 50 messages to prevent memory issues
+      return { aiTranscript: newTranscript.slice(-50) }
+    }),
   clearAiTranscript: () => set({ aiTranscript: [] }),
 }))

@@ -299,7 +299,8 @@ async def sensors_websocket(websocket: WebSocket):
         while True:
             try:
                 # Wait for messages (like ultrasonic request)
-                data = await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
+                # Use longer timeout (60s) to reduce unnecessary pings
+                data = await asyncio.wait_for(websocket.receive_text(), timeout=60.0)
                 msg = json.loads(data)
 
                 if msg.get("type") == "request_ultrasonic":
@@ -307,7 +308,11 @@ async def sensors_websocket(websocket: WebSocket):
 
             except asyncio.TimeoutError:
                 # Send ping to keep connection alive
-                await websocket.send_json({"type": "ping"})
+                try:
+                    await websocket.send_json({"type": "ping"})
+                except Exception:
+                    # Connection lost, exit loop
+                    break
 
     except WebSocketDisconnect:
         pass

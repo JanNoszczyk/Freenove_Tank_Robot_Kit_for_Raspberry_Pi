@@ -9,6 +9,19 @@ export function useKeyboardControls() {
   const activeKeysRef = useRef(new Set<string>())
   const motorStateRef = useRef({ left: 0, right: 0 })
 
+  // Use refs to avoid effect re-running on every servo angle change
+  const servo1Ref = useRef(servo1Angle)
+  const servo2Ref = useRef(servo2Angle)
+
+  // Keep refs in sync with state
+  useEffect(() => {
+    servo1Ref.current = servo1Angle
+  }, [servo1Angle])
+
+  useEffect(() => {
+    servo2Ref.current = servo2Angle
+  }, [servo2Angle])
+
   useEffect(() => {
     if (!connected) return
 
@@ -49,28 +62,33 @@ export function useKeyboardControls() {
       const key = e.key.toLowerCase()
 
       // Camera controls with IJKL (I=up, K=down, J=left, L=right)
+      // Use refs for current values to avoid stale closures
       if (key === 'i') {
-        const newAngle = Math.min(150, servo2Angle + 5)
+        const newAngle = Math.min(150, servo2Ref.current + 5)
+        servo2Ref.current = newAngle
         setServo2Angle(newAngle)
         api.servo(1, newAngle).catch(console.error)
         return
       }
       if (key === 'k') {
-        const newAngle = Math.max(90, servo2Angle - 5)
+        const newAngle = Math.max(90, servo2Ref.current - 5)
+        servo2Ref.current = newAngle
         setServo2Angle(newAngle)
         api.servo(1, newAngle).catch(console.error)
         return
       }
       if (key === 'j') {
         // Left = decrease servo1
-        const newAngle = Math.max(90, servo1Angle - 5)
+        const newAngle = Math.max(90, servo1Ref.current - 5)
+        servo1Ref.current = newAngle
         setServo1Angle(newAngle)
         api.servo(0, newAngle).catch(console.error)
         return
       }
       if (key === 'l') {
         // Right = increase servo1
-        const newAngle = Math.min(150, servo1Angle + 5)
+        const newAngle = Math.min(150, servo1Ref.current + 5)
+        servo1Ref.current = newAngle
         setServo1Angle(newAngle)
         api.servo(0, newAngle).catch(console.error)
         return
@@ -88,6 +106,8 @@ export function useKeyboardControls() {
 
       // Home key resets camera
       if (key === 'home') {
+        servo1Ref.current = 90
+        servo2Ref.current = 140
         setServo1Angle(90)
         setServo2Angle(140)
         api.servo(0, 90).catch(console.error)
@@ -126,5 +146,5 @@ export function useKeyboardControls() {
       window.removeEventListener('blur', handleBlur)
       api.stop().catch(console.error)
     }
-  }, [connected, servo1Angle, servo2Angle, setServo1Angle, setServo2Angle])
+  }, [connected, setServo1Angle, setServo2Angle])
 }
