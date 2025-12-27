@@ -194,10 +194,6 @@ export function AIChat() {
     })
   }
 
-  if (!isAIMode) {
-    return null
-  }
-
   return (
     <Card className="flex-1 flex flex-col">
       <CardHeader className="pb-2">
