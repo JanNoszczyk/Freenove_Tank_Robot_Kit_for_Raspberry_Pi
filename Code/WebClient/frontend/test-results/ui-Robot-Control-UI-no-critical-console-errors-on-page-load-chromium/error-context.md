@@ -1,0 +1,144 @@
+# Page snapshot
+
+```yaml
+- generic [ref=e4]:
+  - banner [ref=e5]:
+    - heading "Tank Robot Control" [level=1] [ref=e6]
+    - generic [ref=e7]: "WASD: Move | IJKL: Camera | O/P: Gripper"
+  - generic [ref=e8]:
+    - generic [ref=e10]:
+      - heading "Video Feed" [level=3] [ref=e12]:
+        - img [ref=e13]
+        - text: Video Feed
+      - img "Robot camera" [ref=e18]
+    - generic [ref=e19]:
+      - generic [ref=e20]:
+        - generic [ref=e22]:
+          - heading "Connection" [level=3] [ref=e23]:
+            - img [ref=e24]
+            - text: Connection
+          - generic [ref=e28]: Connected
+        - generic [ref=e30]:
+          - textbox "raspberrypi.local" [disabled] [ref=e31]
+          - button "Disconnect" [ref=e32] [cursor=pointer]
+      - generic [ref=e35]:
+        - button "Manual" [ref=e36] [cursor=pointer]:
+          - img [ref=e37]
+          - text: Manual
+        - button "AI" [ref=e39] [cursor=pointer]:
+          - img [ref=e40]
+          - text: AI
+      - generic [ref=e43]:
+        - heading "Movement" [level=3] [ref=e45]
+        - generic [ref=e46]:
+          - generic [ref=e47]:
+            - button "Forward" [ref=e49] [cursor=pointer]:
+              - img [ref=e50]
+            - button "Turn Left" [ref=e53] [cursor=pointer]:
+              - img [ref=e54]
+            - button "Stop" [ref=e56] [cursor=pointer]:
+              - img [ref=e57]
+            - button "Turn Right" [ref=e59] [cursor=pointer]:
+              - img [ref=e60]
+            - button "Backward" [ref=e63] [cursor=pointer]:
+              - img [ref=e64]
+          - paragraph [ref=e67]: Use WASD or Arrow keys
+      - generic [ref=e68]:
+        - heading "Camera" [level=3] [ref=e70]
+        - generic [ref=e71]:
+          - generic [ref=e72]:
+            - generic [ref=e73]:
+              - generic [ref=e74]: Pan
+              - generic [ref=e75]: 90°
+            - generic [ref=e76]:
+              - button [ref=e77] [cursor=pointer]:
+                - img [ref=e78]
+              - slider [ref=e83]
+              - button [ref=e84] [cursor=pointer]:
+                - img [ref=e85]
+          - generic [ref=e87]:
+            - generic [ref=e88]:
+              - generic [ref=e89]: Tilt
+              - generic [ref=e90]: 140°
+            - generic [ref=e91]:
+              - button [ref=e92] [cursor=pointer]:
+                - img [ref=e93]
+              - slider [ref=e99]
+              - button [ref=e100] [cursor=pointer]:
+                - img [ref=e101]
+          - button "Home (90°, 140°)" [ref=e103] [cursor=pointer]:
+            - img [ref=e104]
+            - text: Home (90°, 140°)
+          - paragraph [ref=e107]: Use IJKL keys
+      - generic [ref=e108]:
+        - heading "LEDs" [level=3] [ref=e110]:
+          - img [ref=e111]
+          - text: LEDs
+        - generic [ref=e113]:
+          - generic [ref=e114]:
+            - generic [ref=e115]:
+              - checkbox "L1" [checked] [ref=e116] [cursor=pointer]:
+                - generic:
+                  - img
+              - generic [ref=e117]: L1
+            - generic [ref=e118]:
+              - checkbox "L2" [checked] [ref=e119] [cursor=pointer]:
+                - generic:
+                  - img
+              - generic [ref=e120]: L2
+            - generic [ref=e121]:
+              - checkbox "L3" [checked] [ref=e122] [cursor=pointer]:
+                - generic:
+                  - img
+              - generic [ref=e123]: L3
+            - generic [ref=e124]:
+              - checkbox "L4" [checked] [ref=e125] [cursor=pointer]:
+                - generic:
+                  - img
+              - generic [ref=e126]: L4
+            - button "None" [ref=e127] [cursor=pointer]
+          - generic [ref=e128]:
+            - generic [ref=e129]:
+              - text: R
+              - spinbutton [ref=e130]: "255"
+            - generic [ref=e131]:
+              - text: G
+              - spinbutton [ref=e132]: "0"
+            - generic [ref=e133]:
+              - text: B
+              - spinbutton [ref=e134]: "0"
+          - button "Apply Color" [ref=e136] [cursor=pointer]
+          - generic [ref=e137]:
+            - button "M1" [ref=e138] [cursor=pointer]
+            - button "M2" [ref=e139] [cursor=pointer]
+            - button "M3" [ref=e140] [cursor=pointer]
+            - button "M4" [ref=e141] [cursor=pointer]
+      - generic [ref=e142]:
+        - heading "Gripper" [level=3] [ref=e144]:
+          - img [ref=e145]
+          - text: Gripper
+        - generic [ref=e150]:
+          - generic [ref=e151]:
+            - checkbox "Pinch (up)" [ref=e152] [cursor=pointer]
+            - generic [ref=e153] [cursor=pointer]: Pinch (up)
+          - generic [ref=e154]:
+            - checkbox "Drop (down)" [ref=e155] [cursor=pointer]
+            - generic [ref=e156] [cursor=pointer]: Drop (down)
+          - paragraph [ref=e157]: "Keys: O = Pinch, P = Drop"
+      - generic [ref=e158]:
+        - heading "Sensors" [level=3] [ref=e160]:
+          - img [ref=e161]
+          - text: Sensors
+        - generic [ref=e168]:
+          - generic [ref=e169]:
+            - generic [ref=e170]: Ultrasonic
+            - generic [ref=e171]:
+              - generic [ref=e172]: N/A
+              - button [ref=e173] [cursor=pointer]:
+                - img [ref=e174]
+          - generic [ref=e179]:
+            - generic [ref=e180]:
+              - img [ref=e181]
+              - text: Gripper
+            - generic [ref=e186]: N/A
+```
