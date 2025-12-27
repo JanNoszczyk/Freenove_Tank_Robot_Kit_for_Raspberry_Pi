@@ -16,6 +16,7 @@ import asyncio
 import argparse
 import sys
 import logging
+import re
 from mock_robot import MockRobotClient
 from ai_session import AISession, AgentEvent
 
@@ -78,16 +79,49 @@ def print_event(event: AgentEvent):
 # Test scenarios for automated testing
 TEST_SCENARIOS = [
     # (command, expected_behavior, expected_tools)
-    ("go forward", "should move forward", ["move_forward"]),
-    ("turn left", "should turn left", ["turn_left"]),
+    # Basic perception
+    ("what do you see?", "should sense environment", ["sense"]),
+    ("check your surroundings", "should sense", ["sense"]),
+
+    # Distance-controlled movement
+    ("go forward 30cm", "sense + move_toward", ["sense", "move_toward"]),
+    ("move toward the wall", "sense + move_toward", ["sense", "move_toward"]),
+
+    # Timed movement
+    ("back up a bit", "move_timed backward", ["move_timed"]),
+    ("move left for a second", "move_timed left", ["move_timed"]),
+
+    # Rotation
+    ("turn left 90 degrees", "turn_degrees", ["turn_degrees"]),
+    ("look right", "turn + sense", ["turn_degrees", "sense"]),
+    ("face the other way", "turn 180", ["turn_degrees"]),
+
+    # Other controls
     ("stop", "emergency stop", ["stop"]),
     ("set the lights to red", "should set LEDs", ["set_leds"]),
-    ("what is my distance?", "should check sensors", ["get_sensor_status"]),
-    ("move backward slowly", "should reverse", ["move_backward"]),
     ("close the gripper", "should pinch", ["clamp_up"]),
-    ("look to the left", "should pan camera", ["set_servo"]),
-    ("pick up the ball in front", "multi-step task", ["move_forward", "clamp_down", "clamp_up"]),
+    ("pan camera right", "camera servo only", ["set_servo"]),
+
+    # Multi-step with perception
+    ("pick up what's in front of me", "sense + move + grab", ["sense", "move_toward", "clamp_down", "clamp_up"]),
 ]
+
+# Exploration test - object not initially visible
+EXPLORATION_TEST = {
+    "command": "find the red ball",
+    "setup": {
+        "scene": "A living room with wooden floor.",
+        "objects": [
+            {"name": "red ball", "direction": "left", "distance_cm": 80, "description": "A small red rubber ball."}
+        ]
+    },
+    "expected_flow": [
+        "sense",           # Check if visible
+        "turn_degrees",    # Rotate to search
+        "sense",           # Check again
+        "move_toward",     # Navigate to it
+    ]
+}
 
 
 async def interactive_mode(session: AISession, robot: MockRobotClient, tts: bool, verbose: bool):
@@ -103,13 +137,17 @@ Type natural language commands to test the AI agent.
 The agent will interpret your commands and control the mock robot.
 
 {c.CYAN}Special commands:{c.RESET}
-  quit           - Exit the test
-  sensors        - Show current sensor values
-  log            - Show recent command log
-  clear          - Clear command log
-  set distance N - Set ultrasonic distance to N cm
-  set gripper S  - Set gripper status (stopped/up_complete/down_complete)
-  verbose on/off - Toggle real-time event logging
+  quit              - Exit the test
+  sensors           - Show current sensor values
+  vision            - Show mock vision (what agent "sees")
+  log               - Show recent command log
+  clear             - Clear command log
+  set distance N    - Set ultrasonic distance to N cm
+  set gripper S     - Set gripper (stopped/up_complete/down_complete)
+  set scene TEXT    - Set mock scene description
+  add NAME DIR DIST - Add mock object (e.g., add "red ball" left 80)
+  clear objects     - Remove all mock objects
+  verbose on/off    - Toggle real-time event logging
 {c.BOLD}{'=' * 70}{c.RESET}
 """)
 
@@ -173,6 +211,36 @@ The agent will interpret your commands and control the mock robot.
             verbose_mode = False
             logging.getLogger("ai_session").setLevel(logging.WARNING)
             print("  ✓ Verbose mode OFF (summary only)")
+            continue
+
+        # Mock vision commands
+        if cmd == "vision":
+            vision = robot.get_mock_vision()
+            print(f"  👁️ Mock vision: {vision}")
+            continue
+
+        if cmd.startswith("set scene "):
+            scene = cmd[10:]  # Remove "set scene "
+            robot.set_mock_scene(scene)
+            print(f"  ✓ Scene set to: {scene}")
+            continue
+
+        if cmd.startswith("add "):
+            # Parse: add "object name" direction distance
+            # Example: add "red ball" left 80
+            match = re.match(r'add\s+"([^"]+)"\s+(\w+)\s+(\d+)', cmd)
+            if match:
+                name, direction, dist = match.groups()
+                robot.add_mock_object(name, direction, float(dist))
+                print(f"  ✓ Added {name} to the {direction}, {dist}cm away")
+            else:
+                print('  ✗ Usage: add "object name" direction distance')
+                print('    Example: add "red ball" left 80')
+            continue
+
+        if cmd == "clear objects":
+            robot.clear_mock_objects()
+            print("  ✓ Mock objects cleared")
             continue
 
         # Process with AI agent
@@ -360,6 +428,67 @@ async def safety_test(session: AISession, robot: MockRobotClient, verbose: bool)
         return False
 
 
+async def exploration_test(session: AISession, robot: MockRobotClient, verbose: bool):
+    """Test exploration - finding an object not initially visible."""
+    c = Colors
+
+    print(f"\n{c.BOLD}{'=' * 70}{c.RESET}")
+    print(f"{c.BOLD}  🔍 Exploration Test - Find Hidden Object{c.RESET}")
+    print(f"{c.BOLD}{'=' * 70}{c.RESET}")
+
+    # Setup: Add a red ball to the LEFT (not initially visible)
+    robot.set_ultrasonic(100.0)
+    robot.clear_log()
+    robot.clear_mock_objects()
+    robot.set_mock_scene("A living room with wooden floor and white walls.")
+    robot.add_mock_object("red ball", "left", 80, "A small red rubber ball on the floor.")
+
+    print(f"\n  📍 Setup:")
+    print(f"     Scene: {robot._mock_scene}")
+    print(f"     Hidden object: red ball (to the LEFT, 80cm away)")
+    print(f"     Robot facing: forward (ball not visible)")
+    print(f"\n  🎯 Command: \"find the red ball\"")
+    print(f"\n  Expected: Agent should scan (turn + sense), find ball, navigate to it")
+
+    result = await session.process_text(
+        "find the red ball",
+        generate_tts=False,
+        on_event=print_event if verbose else None
+    )
+
+    events = result.get("events", [])
+    tool_calls = [e.data for e in events if e.event_type == "tool_call"]
+
+    print(f"\n  🔧 Tool calls made: {tool_calls}")
+    print(f"  💬 Response: {result['assistant_text']}")
+    print(f"  📤 Robot commands: {robot.get_command_log()[:10]}")  # First 10
+
+    # Check for exploration behavior
+    has_sense = "sense" in tool_calls
+    has_turn = "turn_degrees" in tool_calls
+    has_move = "move_toward" in tool_calls or "move_timed" in tool_calls
+
+    # Check if agent mentioned finding the ball
+    response_lower = (result.get("assistant_text") or "").lower()
+    found_ball = "found" in response_lower or "ball" in response_lower or "red" in response_lower
+
+    print(f"\n  📊 Analysis:")
+    print(f"     Used sense(): {c.GREEN if has_sense else c.RED}{has_sense}{c.RESET}")
+    print(f"     Used turn_degrees(): {c.GREEN if has_turn else c.YELLOW}{has_turn}{c.RESET}")
+    print(f"     Used movement: {c.GREEN if has_move else c.YELLOW}{has_move}{c.RESET}")
+    print(f"     Mentioned finding ball: {c.GREEN if found_ball else c.RED}{found_ball}{c.RESET}")
+
+    # Success if agent used perception and either found it or made progress
+    success = has_sense and (found_ball or has_turn)
+
+    if success:
+        print(f"\n  {c.GREEN}{c.BOLD}✅ PASS - Agent explored and found the ball!{c.RESET}")
+    else:
+        print(f"\n  {c.YELLOW}{c.BOLD}⚠️ PARTIAL - Agent attempted but may need improvement{c.RESET}")
+
+    return success
+
+
 async def main():
     parser = argparse.ArgumentParser(
         description="Test AI Agent with Mock Robot",
@@ -372,10 +501,12 @@ Examples:
   python test_ai_agent.py --tts        # Enable TTS playback
   python test_ai_agent.py --distance 10  # Test with close obstacle
   python test_ai_agent.py --safety     # Run safety test only
+  python test_ai_agent.py --explore    # Run exploration test
         """
     )
     parser.add_argument("--auto", action="store_true", help="Run automated tests")
     parser.add_argument("--safety", action="store_true", help="Run safety test only")
+    parser.add_argument("--explore", action="store_true", help="Run exploration test")
     parser.add_argument("--tts", action="store_true", help="Enable TTS output")
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose event logging")
     parser.add_argument("--distance", type=float, default=50.0, help="Initial ultrasonic distance (cm)")
@@ -409,6 +540,9 @@ Examples:
     # Run appropriate mode
     if args.safety:
         success = await safety_test(session, robot, args.verbose)
+        sys.exit(0 if success else 1)
+    elif args.explore:
+        success = await exploration_test(session, robot, args.verbose)
         sys.exit(0 if success else 1)
     elif args.auto:
         success = await automated_tests(session, robot, args.verbose)

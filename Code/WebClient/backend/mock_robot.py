@@ -1,9 +1,10 @@
 """Mock Robot Client for testing AI agent without hardware.
 
 Drop-in replacement for RobotClient that logs commands to console.
+Includes mock vision for testing perception-based navigation.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 
@@ -13,14 +14,32 @@ class SensorData:
     gripper_status: Optional[str] = None
 
 
+@dataclass
+class MockObject:
+    """An object in the mock environment."""
+    name: str
+    direction: str  # "ahead", "left", "right", "behind"
+    distance_cm: float
+    description: str = ""
+
+
 class MockRobotClient:
-    """Mock robot for testing AI agent without hardware."""
+    """Mock robot for testing AI agent without hardware.
+
+    Includes mock vision that simulates camera perception for testing
+    navigation and object-finding capabilities.
+    """
 
     def __init__(self, ultrasonic: float = 50.0, gripper: str = "stopped"):
         self._connected = True
         self._ip = "mock://test"
         self._sensors = SensorData(ultrasonic=ultrasonic, gripper_status=gripper)
         self._command_log: list[str] = []
+
+        # Mock vision state
+        self._mock_scene = "A room with wooden floor and white walls."
+        self._mock_objects: list[MockObject] = []
+        self._current_heading = 0  # 0=forward, 90=left, 180=behind, 270=right
 
     @property
     def connected(self) -> bool:
@@ -96,3 +115,99 @@ class MockRobotClient:
     def request_ultrasonic(self):
         """Request ultrasonic distance reading."""
         self._log("CMD_SONIC#")
+
+    # === Mock Vision Support ===
+
+    def set_mock_scene(self, scene: str):
+        """Set the base scene description for mock vision."""
+        self._mock_scene = scene
+
+    def add_mock_object(self, name: str, direction: str, distance_cm: float, description: str = ""):
+        """Add an object to the mock environment.
+
+        Args:
+            name: Object name (e.g., "red ball", "wooden chair")
+            direction: Where it is relative to robot ("ahead", "left", "right", "behind")
+            distance_cm: How far away
+            description: Optional extra description
+        """
+        self._mock_objects.append(MockObject(name, direction, distance_cm, description))
+
+    def clear_mock_objects(self):
+        """Remove all mock objects."""
+        self._mock_objects.clear()
+
+    def get_mock_vision(self, question: str = None) -> str:
+        """Simulate camera vision response.
+
+        Args:
+            question: Optional specific question about the scene.
+
+        Returns:
+            Simulated vision description.
+        """
+        # Build description of visible objects (based on current heading)
+        visible_objects = []
+        for obj in self._mock_objects:
+            # Calculate if object is visible from current heading
+            obj_angle = {"ahead": 0, "left": 90, "right": 270, "behind": 180}.get(obj.direction, 0)
+            relative_angle = (obj_angle - self._current_heading) % 360
+
+            # Objects within ~60 degrees of forward are visible
+            if relative_angle <= 60 or relative_angle >= 300:
+                if relative_angle <= 30 or relative_angle >= 330:
+                    pos = "directly ahead"
+                elif relative_angle < 180:
+                    pos = "slightly to the left"
+                else:
+                    pos = "slightly to the right"
+                visible_objects.append(f"{obj.name} {pos}, about {obj.distance_cm:.0f}cm away")
+
+        # Handle specific questions
+        if question:
+            question_lower = question.lower()
+
+            # Check if asking about a specific object
+            for obj in self._mock_objects:
+                if obj.name.lower() in question_lower:
+                    # Check if visible
+                    obj_angle = {"ahead": 0, "left": 90, "right": 270, "behind": 180}.get(obj.direction, 0)
+                    relative_angle = (obj_angle - self._current_heading) % 360
+
+                    if relative_angle <= 60 or relative_angle >= 300:
+                        return f"Yes, I see the {obj.name} {obj.direction}, about {obj.distance_cm:.0f}cm away. {obj.description}"
+                    else:
+                        return f"I don't see the {obj.name} in my current view. It might be {obj.direction}."
+
+            # Generic question response
+            if visible_objects:
+                return f"I see: {', '.join(visible_objects)}. {self._mock_scene}"
+            else:
+                return f"I don't see that. {self._mock_scene}"
+
+        # No question - general scene description
+        if visible_objects:
+            return f"{self._mock_scene} I see: {', '.join(visible_objects)}."
+        else:
+            return self._mock_scene
+
+    def simulate_turn(self, degrees: int):
+        """Update mock heading after a turn (for vision simulation).
+
+        Args:
+            degrees: Rotation amount. Positive=left, negative=right.
+        """
+        self._current_heading = (self._current_heading + degrees) % 360
+
+    def simulate_move_toward(self, distance_cm: float):
+        """Update mock object distances after moving forward.
+
+        Args:
+            distance_cm: How far the robot moved forward.
+        """
+        for obj in self._mock_objects:
+            if obj.direction == "ahead":
+                obj.distance_cm = max(0, obj.distance_cm - distance_cm)
+        # Also update ultrasonic
+        if self._sensors.ultrasonic is not None:
+            self._sensors.ultrasonic = max(0, self._sensors.ultrasonic - distance_cm)

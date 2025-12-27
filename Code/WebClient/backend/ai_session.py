@@ -9,6 +9,7 @@ import base64
 import asyncio
 import tempfile
 import logging
+import time
 from pathlib import Path
 from typing import Optional, Callable, Any
 from dataclasses import dataclass, field
@@ -18,6 +19,7 @@ from google import genai
 from google.genai import types
 from google.adk import Agent, Runner
 from google.adk.sessions import InMemorySessionService
+from google.adk.planners import BuiltInPlanner
 
 # Load .env
 load_dotenv()
@@ -35,38 +37,61 @@ AGENT_MODEL = "gemini-3-flash-preview"  # Agent reasoning (latest, higher rate l
 ULTRASONIC_STALE_THRESHOLD = 2.0
 SAFETY_DISTANCE_BLOCK = 15
 
-# Robot brain prompt - improved for tool execution
-ROBOT_BRAIN_INSTRUCTION = """You are the brain of a tank robot. Your job is to EXECUTE commands using tools.
+# Calibration constants (tune on real robot)
+CM_PER_SECOND_AT_2000 = 50  # Approximate cm/sec at motor speed 2000
+DEGREES_PER_SECOND_AT_1500 = 90  # Approximate degrees/sec at turn speed 1500
+VISION_MODEL = "gemini-2.5-flash"  # For camera analysis
+
+# Thinking configuration - extended reasoning for complex robot decisions
+# Range: 0 (off) to 24576 (maximum). Default auto is 8192.
+THINKING_BUDGET = 17200  # 70% of max (24576) - good balance of reasoning vs latency
+
+# Robot brain prompt - perception-first with exploration
+ROBOT_BRAIN_INSTRUCTION = """You are the brain of a tank robot. PERCEIVE before you ACT.
 
 ## CRITICAL RULES
-1. ALWAYS use tools to perform actions - never just describe what you would do
-2. For multi-step tasks, call tools in sequence (e.g., "pick up ball" = move_forward → clamp_down → clamp_up)
-3. Check sensor readings using get_sensor_status() when needed
-4. If blocked by obstacle, try alternative approaches (back up, turn)
+1. Call sense() BEFORE moving to understand your environment
+2. ALWAYS use tools - never just describe what you would do
+3. For multi-step tasks, call tools in sequence with sense() between steps
+4. Verify results with sense() after important actions
 
-## AVAILABLE TOOLS
-- move_forward(speed=2000) / move_backward(speed=2000) - Move tank (speed: 0-2500)
-- turn_left(speed=1500) / turn_right(speed=1500) - Rotate in place
-- stop() - Emergency stop all motors
-- set_servo(channel, angle) - Camera: channel 0=pan, 1=tilt, angle 90-150
-- set_leds(r, g, b) - Set LED color (0-255 each)
-- clamp_up() / clamp_down() - Gripper control (up=close/pinch, down=open/release)
-- get_sensor_status() - Read distance and clamp state
+## PERCEPTION TOOLS
+- sense() → Returns: distance, gripper state, AND camera view description
+- sense("Is there a red ball?") → Same + answer to specific question
+
+## MOVEMENT TOOLS
+- move_toward(cm) - Forward using ultrasonic feedback. Precise. Stops at distance.
+- move_timed(direction, ms) - Any direction for duration. ~50cm/sec. Directions: forward/backward/left/right
+- turn_degrees(degrees) - Rotate body. Positive=left, negative=right. ~90°/sec
+- stop() - Emergency stop
+
+## OTHER TOOLS
+- set_servo(channel, angle) - Camera gimbal: 0=pan, 1=tilt, 90-150°
+- set_leds(r, g, b) - LED color (0-255)
+- clamp_up() / clamp_down() - Gripper close/open
+
+## EXPLORATION
+If asked to find something not currently visible:
+1. sense("Is there a [object]?")
+2. If not found: turn_degrees(90) + sense() - repeat up to 4 times (360° scan)
+3. If spotted: navigate toward it with move_toward() or move_timed()
+4. Verify with sense() when close
 
 ## SAFETY
-- Forward movement blocked if distance < 15cm or no reading
+- move_toward() auto-blocks if obstacle < 15cm
 - Emergency stop on "stop/halt/freeze/emergency"
 
 ## RESPONSE STYLE
-- Be CONCISE: "Moving forward." not "I am now executing the forward movement command."
-- After executing tools, briefly confirm what was done
-- If a tool returns BLOCKED, explain why and suggest alternatives
+- Include key perception info: "See ball 40cm left. Turning."
+- After actions: "Turned left. Ball now ahead, 35cm."
+- Be CONCISE but INFORMATIVE
 
 ## EXAMPLES
-User: "go forward" → call move_forward() → "Moving forward."
-User: "pick up the ball" → call move_forward(), clamp_down(), clamp_up() → "Picked up the ball."
-User: "look left" → call set_servo(0, 120) → "Looking left."
-User: "what do you see?" → call get_sensor_status() → report readings
+User: "go forward 30cm" → sense(), move_toward(30) → "Clear ahead. Moved 28cm, wall at 20cm."
+User: "look left" → turn_degrees(90), sense() → "Turned left. Chair 60cm ahead, clear path."
+User: "find the red ball" → sense("red ball?") → not found → turn_degrees(90), sense() → "Found! Ball 1m ahead." → move_toward(90) → "At the ball."
+User: "what do you see?" → sense() → "Distance 45cm. I see a wooden table with books, chair to the right."
+User: "pick up the cup" → sense("where is cup?"), move_toward(), clamp_down(), clamp_up(), sense("got it?") → "Cup secured."
 """
 
 
@@ -121,12 +146,18 @@ class AISession:
         # Create robot tools
         tools = self._create_tools()
 
-        # Initialize ADK agent
+        # Initialize ADK agent with maximum thinking for complex reasoning
         self.agent = Agent(
             model=AGENT_MODEL,
             name="robot_brain",
             instruction=ROBOT_BRAIN_INSTRUCTION,
-            tools=tools
+            tools=tools,
+            planner=BuiltInPlanner(
+                thinking_config=types.ThinkingConfig(
+                    include_thoughts=True,
+                    thinking_budget=THINKING_BUDGET
+                )
+            )
         )
         self.session_service = InMemorySessionService()
         self.runner = Runner(
@@ -147,60 +178,245 @@ class AISession:
     def _create_tools(self):
         """Create robot control tools for the ADK agent."""
         robot = self.robot
+        session = self  # Capture for vision API access
 
-        def move_forward(speed: int = 2000) -> str:
-            """Move the robot forward."""
-            if not robot.connected:
-                return "ERROR: Robot not connected"
+        # === PERCEPTION ===
 
+        def sense(question: str = None) -> str:
+            """Get full environmental awareness: sensors + camera vision.
+
+            Args:
+                question: Optional specific question about what's visible.
+                         If None, returns sensors + brief scene description.
+
+            Returns:
+                Combined sensor readings and vision analysis.
+            """
+            # Get sensor readings
             distance = robot.sensors.ultrasonic
-            if distance is None:
-                return "BLOCKED: No distance reading"
-            if distance < SAFETY_DISTANCE_BLOCK:
-                return f"BLOCKED: Obstacle at {distance:.1f}cm"
+            gripper = robot.sensors.gripper_status
 
-            speed = max(0, min(2500, abs(speed)))
-            robot.motor(speed, speed)
+            parts = []
+            if distance is not None:
+                parts.append(f"Distance: {distance:.1f}cm")
+            else:
+                parts.append("Distance: No reading")
+            if gripper:
+                parts.append(f"Gripper: {gripper}")
+
+            # Get vision analysis
+            vision_result = ""
+            try:
+                # Check if robot has camera frame capability
+                if hasattr(robot, 'get_camera_frame'):
+                    frame = robot.get_camera_frame()
+                    if frame:
+                        # Real camera - use Gemini vision
+                        prompt = question or "Briefly describe what's visible ahead. Be concise."
+                        vision_response = session.client.models.generate_content(
+                            model=VISION_MODEL,
+                            contents=[
+                                prompt,
+                                types.Part.from_bytes(data=frame, mime_type="image/jpeg")
+                            ]
+                        )
+                        vision_result = vision_response.text.strip()
+                    else:
+                        vision_result = "Camera: No frame available"
+                elif hasattr(robot, 'get_mock_vision'):
+                    # Mock robot - return simulated vision
+                    vision_result = robot.get_mock_vision(question)
+                else:
+                    vision_result = "Camera: Not available"
+            except Exception as e:
+                vision_result = f"Vision error: {e}"
+
+            parts.append(f"Vision: {vision_result}")
+            return " | ".join(parts)
+
+        # === MOVEMENT WITH FEEDBACK ===
+
+        def move_toward(distance_cm: int) -> str:
+            """Move forward approximately distance_cm using ultrasonic feedback.
+
+            Args:
+                distance_cm: Target distance to travel in centimeters.
+
+            Returns:
+                Result with actual distance traveled.
+            """
+            if not robot.connected:
+                return "ERROR: Robot not connected"
+
+            start_distance = robot.sensors.ultrasonic
+            if start_distance is None:
+                return "ERROR: No initial distance reading - cannot use ultrasonic feedback"
+
+            target_distance = start_distance - distance_cm
+            if target_distance < SAFETY_DISTANCE_BLOCK:
+                available = start_distance - SAFETY_DISTANCE_BLOCK
+                if available <= 0:
+                    return f"BLOCKED: Already at obstacle ({start_distance:.1f}cm)"
+                return f"BLOCKED: Only {available:.1f}cm available before obstacle"
+
+            # Mock robot: simulate movement immediately (no real sensors)
+            if hasattr(robot, 'simulate_move_toward'):
+                robot.motor(2000, 2000)
+                time.sleep(0.1)  # Brief delay for realism
+                robot.stop()
+                robot.simulate_move_toward(distance_cm)
+                new_distance = robot.sensors.ultrasonic
+                return f"Moved {distance_cm}cm. Now {new_distance:.1f}cm from obstacle."
+
+            # Real robot: poll until target reached or timeout
+            robot.motor(2000, 2000)
             robot.request_ultrasonic()
-            return f"Moving forward at speed {speed}"
 
-        def move_backward(speed: int = 2000) -> str:
-            """Move the robot backward."""
+            start_time = time.time()
+            timeout = 15  # seconds
+            poll_interval = 0.15
+
+            while time.time() - start_time < timeout:
+                time.sleep(poll_interval)
+                robot.request_ultrasonic()
+                time.sleep(0.05)  # Wait for response
+
+                current = robot.sensors.ultrasonic
+                if current is None:
+                    robot.stop()
+                    traveled = start_distance - (robot.sensors.ultrasonic or start_distance)
+                    return f"STOPPED: Lost distance reading after ~{traveled:.0f}cm"
+
+                if current <= target_distance:
+                    robot.stop()
+                    traveled = start_distance - current
+                    return f"Moved {traveled:.1f}cm. Now {current:.1f}cm from obstacle."
+
+                if current < SAFETY_DISTANCE_BLOCK:
+                    robot.stop()
+                    traveled = start_distance - current
+                    return f"STOPPED: Obstacle at {current:.1f}cm after traveling {traveled:.1f}cm"
+
+            # Timeout
+            robot.stop()
+            current = robot.sensors.ultrasonic
+            traveled = start_distance - current if current else distance_cm
+            return f"TIMEOUT after {traveled:.0f}cm. Obstacle at {current:.1f}cm."
+
+        def move_timed(direction: str, duration_ms: int) -> str:
+            """Move in a direction for specified duration.
+
+            Args:
+                direction: One of 'forward', 'backward', 'left', 'right'
+                duration_ms: How long to move in milliseconds (max 5000)
+
+            Returns:
+                Result with estimated distance traveled.
+            """
             if not robot.connected:
                 return "ERROR: Robot not connected"
-            speed = max(0, min(2500, abs(speed)))
-            robot.motor(-speed, -speed)
-            return f"Moving backward at speed {speed}"
 
-        def turn_left(speed: int = 1500) -> str:
-            """Turn the robot left."""
+            direction = direction.lower()
+            duration_ms = max(100, min(5000, duration_ms))  # Clamp 100ms-5s
+            duration_sec = duration_ms / 1000
+
+            # Safety check for forward movement
+            if direction == "forward":
+                distance = robot.sensors.ultrasonic
+                if distance is not None and distance < SAFETY_DISTANCE_BLOCK:
+                    return f"BLOCKED: Obstacle at {distance:.1f}cm"
+
+            # Set motor speeds based on direction
+            speed = 2000
+            if direction == "forward":
+                robot.motor(speed, speed)
+                estimated_cm = duration_sec * CM_PER_SECOND_AT_2000
+            elif direction == "backward":
+                robot.motor(-speed, -speed)
+                estimated_cm = duration_sec * CM_PER_SECOND_AT_2000
+            elif direction == "left":
+                robot.motor(-1500, 1500)
+                estimated_cm = None  # Rotation, not linear
+            elif direction == "right":
+                robot.motor(1500, -1500)
+                estimated_cm = None
+            else:
+                return f"ERROR: Unknown direction '{direction}'. Use: forward, backward, left, right"
+
+            # Wait for duration
+            time.sleep(duration_sec)
+            robot.stop()
+
+            # Update mock robot state if applicable
+            if direction == "forward" and hasattr(robot, 'simulate_move_toward'):
+                robot.simulate_move_toward(estimated_cm)
+            elif hasattr(robot, 'simulate_turn'):
+                if direction == "left":
+                    # Estimate degrees from duration: ~90°/sec at speed 1500
+                    estimated_degrees = int(duration_sec * DEGREES_PER_SECOND_AT_1500)
+                    robot.simulate_turn(estimated_degrees)
+                elif direction == "right":
+                    estimated_degrees = int(duration_sec * DEGREES_PER_SECOND_AT_1500)
+                    robot.simulate_turn(-estimated_degrees)
+
+            if estimated_cm:
+                return f"Moved {direction} for {duration_ms}ms (~{estimated_cm:.0f}cm)"
+            else:
+                return f"Rotated {direction} for {duration_ms}ms"
+
+        def turn_degrees(degrees: int) -> str:
+            """Rotate the robot body by approximately N degrees.
+
+            Args:
+                degrees: Rotation amount. Positive = left, negative = right.
+
+            Returns:
+                Result with estimated rotation.
+            """
             if not robot.connected:
                 return "ERROR: Robot not connected"
-            speed = max(0, min(2500, abs(speed)))
-            robot.motor(-speed, speed)
-            return f"Turning left at speed {speed}"
 
-        def turn_right(speed: int = 1500) -> str:
-            """Turn the robot right."""
-            if not robot.connected:
-                return "ERROR: Robot not connected"
-            speed = max(0, min(2500, abs(speed)))
-            robot.motor(speed, -speed)
-            return f"Turning right at speed {speed}"
+            degrees = max(-360, min(360, degrees))  # Clamp to one full rotation
+            if degrees == 0:
+                return "No rotation needed"
+
+            # Calculate duration from calibration
+            duration_sec = abs(degrees) / DEGREES_PER_SECOND_AT_1500
+
+            # Set motor direction
+            speed = 1500
+            if degrees > 0:  # Left
+                robot.motor(-speed, speed)
+                direction = "left"
+            else:  # Right
+                robot.motor(speed, -speed)
+                direction = "right"
+
+            # Wait for rotation
+            time.sleep(duration_sec)
+            robot.stop()
+
+            # Update mock robot heading if applicable
+            if hasattr(robot, 'simulate_turn'):
+                robot.simulate_turn(degrees)
+
+            return f"Rotated {direction} ~{abs(degrees)}°"
 
         def stop() -> str:
-            """Stop all motors immediately."""
+            """Emergency stop all motors immediately."""
             robot.stop()
             return "STOPPED"
 
+        # === SERVO/LED/GRIPPER ===
+
         def set_servo(channel: int, angle: int) -> str:
-            """Set servo angle. Channel 0=pan, 1=tilt. Angle 90-150."""
+            """Set camera servo angle. Channel 0=pan, 1=tilt. Angle 90-150."""
             if not robot.connected:
                 return "ERROR: Robot not connected"
             channel = max(0, min(1, channel))
             angle = max(90, min(150, angle))
             robot.servo(channel, angle)
-            return f"Servo {'pan' if channel == 0 else 'tilt'} set to {angle} degrees"
+            return f"Camera {'pan' if channel == 0 else 'tilt'} set to {angle}°"
 
         def set_leds(r: int, g: int, b: int) -> str:
             """Set LED color (RGB 0-255)."""
@@ -211,37 +427,22 @@ class AISession:
             return f"LEDs set to RGB({r},{g},{b})"
 
         def clamp_up() -> str:
-            """Move the clamp/gripper up (pinch)."""
+            """Close the gripper (pinch/grab)."""
             if not robot.connected:
                 return "ERROR: Robot not connected"
             robot.gripper(1)
-            return "Clamp moving up"
+            return "Gripper closing"
 
         def clamp_down() -> str:
-            """Move the clamp/gripper down (release)."""
+            """Open the gripper (release)."""
             if not robot.connected:
                 return "ERROR: Robot not connected"
             robot.gripper(2)
-            return "Clamp moving down"
-
-        def get_sensor_status() -> str:
-            """Get current sensor readings."""
-            distance = robot.sensors.ultrasonic
-            clamp = robot.sensors.gripper_status
-            connected = robot.connected
-
-            parts = [f"Robot: {'Connected' if connected else 'DISCONNECTED'}"]
-            if distance is not None:
-                parts.append(f"Distance: {distance:.1f}cm")
-            else:
-                parts.append("Distance: No reading")
-            if clamp:
-                parts.append(f"Clamp: {clamp}")
-            return ", ".join(parts)
+            return "Gripper opening"
 
         return [
-            move_forward, move_backward, turn_left, turn_right, stop,
-            set_servo, set_leds, clamp_up, clamp_down, get_sensor_status
+            sense, move_toward, move_timed, turn_degrees, stop,
+            set_servo, set_leds, clamp_up, clamp_down
         ]
 
     async def process_audio(self, audio_base64: str) -> dict:
@@ -393,7 +594,6 @@ class AISession:
             emit(AgentEvent("prompt", prompt))
 
             response_text = ""
-            tool_calls_seen = set()  # Track unique tool calls
 
             async for event in self.runner.run_async(
                 user_id="user",
@@ -423,10 +623,7 @@ class AISession:
                                 else:
                                     args = {"raw": str(fc.args)}
 
-                            call_id = f"{fc.name}_{args}"
-                            if call_id not in tool_calls_seen:
-                                tool_calls_seen.add(call_id)
-                                emit(AgentEvent("tool_call", fc.name, {"args": args}))
+                            emit(AgentEvent("tool_call", fc.name, {"args": args}))
 
                         # Handle function responses
                         if hasattr(part, 'function_response') and part.function_response:
