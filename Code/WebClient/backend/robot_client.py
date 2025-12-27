@@ -35,6 +35,7 @@ class RobotClient:
         self._sensors = SensorData()
         self._sensor_callbacks: list[Callable[[str, any], None]] = []
         self._lock = threading.Lock()
+        self._latest_frame: Optional[bytes] = None  # Cache latest video frame
 
     @property
     def connected(self) -> bool:
@@ -227,6 +228,8 @@ class RobotClient:
 
                 # Validate JPEG (basic check)
                 if self._is_valid_jpeg(jpeg_data):
+                    # Cache the latest frame for get_camera_frame()
+                    self._latest_frame = jpeg_data
                     yield jpeg_data
 
         except Exception as e:
@@ -243,6 +246,14 @@ class RobotClient:
             # Check for JPEG end marker
             return data.rstrip(b'\0\r\n').endswith(b'\xff\xd9')
         return True  # Allow other valid formats
+
+    def get_camera_frame(self) -> Optional[bytes]:
+        """Get the latest camera frame (JPEG) for AI vision.
+
+        Returns the most recent frame from the video stream, or None if
+        video isn't running or no frames have been received yet.
+        """
+        return self._latest_frame
 
     # === Convenience Methods ===
 

@@ -10,6 +10,7 @@ import asyncio
 import tempfile
 import logging
 import time
+import wave
 from pathlib import Path
 from typing import Optional, Callable, Any
 from dataclasses import dataclass, field
@@ -45,6 +46,23 @@ VISION_MODEL = "gemini-2.5-flash"  # For camera analysis
 # Thinking configuration - extended reasoning for complex robot decisions
 # Range: 0 (off) to 24576 (maximum). Default auto is 8192.
 THINKING_BUDGET = 17200  # 70% of max (24576) - good balance of reasoning vs latency
+
+# TTS audio output format (raw PCM from Gemini)
+TTS_SAMPLE_RATE = 24000  # 24kHz
+TTS_CHANNELS = 1  # Mono
+TTS_SAMPLE_WIDTH = 2  # 16-bit
+
+
+def pcm_to_wav(pcm_data: bytes) -> bytes:
+    """Convert raw PCM audio to WAV format for browser playback."""
+    buffer = io.BytesIO()
+    with wave.open(buffer, 'wb') as wav_file:
+        wav_file.setnchannels(TTS_CHANNELS)
+        wav_file.setsampwidth(TTS_SAMPLE_WIDTH)
+        wav_file.setframerate(TTS_SAMPLE_RATE)
+        wav_file.writeframes(pcm_data)
+    return buffer.getvalue()
+
 
 # Robot brain prompt - perception-first with exploration
 ROBOT_BRAIN_INSTRUCTION = """You are the brain of a tank robot. PERCEIVE before you ACT.
@@ -154,7 +172,7 @@ class AISession:
             tools=tools,
             planner=BuiltInPlanner(
                 thinking_config=types.ThinkingConfig(
-                    include_thoughts=True,
+                    include_thoughts=False,  # Don't include thinking in response text
                     thinking_budget=THINKING_BUDGET
                 )
             )
@@ -685,8 +703,10 @@ class AISession:
 
             for part in candidate.content.parts:
                 if hasattr(part, 'inline_data') and part.inline_data:
-                    audio_data = part.inline_data.data
-                    return base64.b64encode(audio_data).decode()
+                    # TTS returns raw PCM - convert to WAV for browser playback
+                    pcm_data = part.inline_data.data
+                    wav_data = pcm_to_wav(pcm_data)
+                    return base64.b64encode(wav_data).decode()
 
             return None
 

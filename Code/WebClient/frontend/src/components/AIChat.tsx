@@ -69,7 +69,8 @@ export function AIChat() {
 
   const playAudio = async (base64Data: string) => {
     try {
-      const response = await fetch(`data:audio/mp3;base64,${base64Data}`)
+      // TTS returns WAV audio
+      const response = await fetch(`data:audio/wav;base64,${base64Data}`)
       const blob = await response.blob()
       const url = URL.createObjectURL(blob)
       const audio = new Audio(url)
