@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 from typing import Optional, Callable, Any
 from dataclasses import dataclass, field
-from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv
 
 from google import genai
 from google.genai import types
@@ -21,8 +21,8 @@ from google.adk import Agent, Runner
 from google.adk.sessions import InMemorySessionService
 from google.adk.planners import BuiltInPlanner
 
-# Load .env
-load_dotenv()
+# Load .env from repo root (find_dotenv walks up directory tree)
+load_dotenv(find_dotenv())
 
 # Configure logging
 logger = logging.getLogger("ai_session")

@@ -22,7 +22,7 @@ import functools
 from pathlib import Path
 from typing import Optional
 import cv2
-from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv
 
 from PyQt5.QtCore import QObject, pyqtSignal  # [FIX #3] Qt signals
 
@@ -31,9 +31,8 @@ from google.genai import types
 from google.adk import Agent, Runner
 from google.adk.sessions import InMemorySessionService
 
-# Load .env from script directory (works on Windows/Mac regardless of CWD)
-_SCRIPT_DIR = Path(__file__).parent
-load_dotenv(_SCRIPT_DIR / ".env")
+# Load .env from repo root (find_dotenv walks up directory tree)
+load_dotenv(find_dotenv())
 
 # Audio constants
 AUDIO_INPUT_RATE = 16000   # Live API input: 16kHz
