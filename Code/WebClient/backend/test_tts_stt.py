@@ -14,9 +14,12 @@ Usage:
 import asyncio
 import argparse
 import base64
+import io
 import os
+import struct
 import subprocess
 import tempfile
+import wave
 from pathlib import Path
 
 from dotenv import load_dotenv, find_dotenv
@@ -28,9 +31,26 @@ load_dotenv(find_dotenv())
 
 
 # Configuration - same as ai_session.py
-STT_MODEL = "gemini-2.5-flash"
-TTS_MODEL = "gemini-2.5-flash"
-TTS_VOICE = "Puck"
+STT_MODEL = "gemini-3-flash-preview"  # Transcription
+TTS_MODEL = "gemini-2.5-flash-preview-tts"  # Dedicated TTS model
+TTS_VOICE = "Puck"  # One of 30 available voices
+
+# TTS output format (raw PCM)
+TTS_SAMPLE_RATE = 24000  # 24kHz
+TTS_CHANNELS = 1  # Mono
+TTS_SAMPLE_WIDTH = 2  # 16-bit
+
+
+def pcm_to_wav(pcm_data: bytes, sample_rate: int = TTS_SAMPLE_RATE,
+               channels: int = TTS_CHANNELS, sample_width: int = TTS_SAMPLE_WIDTH) -> bytes:
+    """Convert raw PCM audio to WAV format."""
+    buffer = io.BytesIO()
+    with wave.open(buffer, 'wb') as wav_file:
+        wav_file.setnchannels(channels)
+        wav_file.setsampwidth(sample_width)
+        wav_file.setframerate(sample_rate)
+        wav_file.writeframes(pcm_data)
+    return buffer.getvalue()
 
 # Test phrases for TTS
 TTS_TEST_PHRASES = [
@@ -118,13 +138,15 @@ async def test_tts(client: genai.Client, phrase: str, play: bool = False) -> dic
         return result
 
 
-async def test_stt(client: genai.Client, audio_data: bytes, expected_text: str = None) -> dict:
+async def test_stt(client: genai.Client, audio_data: bytes, expected_text: str = None,
+                   is_raw_pcm: bool = False) -> dict:
     """Test STT transcription.
 
     Args:
         client: Gemini client
-        audio_data: Raw audio bytes
+        audio_data: Raw audio bytes (PCM or WAV)
         expected_text: Optional expected transcription for validation
+        is_raw_pcm: If True, audio_data is raw PCM and needs WAV conversion
 
     Returns:
         dict with keys: success, transcription, error
@@ -137,6 +159,10 @@ async def test_stt(client: genai.Client, audio_data: bytes, expected_text: str =
     }
 
     try:
+        # Convert raw PCM to WAV if needed
+        if is_raw_pcm:
+            audio_data = pcm_to_wav(audio_data)
+
         # Detect mime type from audio data
         mime_type = "audio/wav"  # Default
         if audio_data[:4] == b'RIFF':
@@ -145,7 +171,6 @@ async def test_stt(client: genai.Client, audio_data: bytes, expected_text: str =
             mime_type = "audio/mpeg"
         elif audio_data[:4] == b'OggS':
             mime_type = "audio/ogg"
-        # Gemini TTS returns raw PCM in a container
 
         response = client.models.generate_content(
             model=STT_MODEL,
@@ -187,8 +212,8 @@ async def test_round_trip(client: genai.Client, phrase: str) -> dict:
         result["error"] = f"TTS failed: {tts_result['error']}"
         return result
 
-    # Step 2: Transcribe the audio back
-    stt_result = await test_stt(client, tts_result["audio_data"], expected_text=phrase)
+    # Step 2: Transcribe the audio back (TTS outputs raw PCM)
+    stt_result = await test_stt(client, tts_result["audio_data"], expected_text=phrase, is_raw_pcm=True)
     if not stt_result["success"]:
         result["error"] = f"STT failed: {stt_result['error']}"
         return result
@@ -269,8 +294,8 @@ async def run_stt_tests(client: genai.Client):
 
         print(f"  {Colors.DIM}Generated {tts_result['audio_size']:,} bytes{Colors.RESET}")
 
-        # Transcribe it back
-        stt_result = await test_stt(client, tts_result["audio_data"], expected_text=phrase)
+        # Transcribe it back (TTS outputs raw PCM)
+        stt_result = await test_stt(client, tts_result["audio_data"], expected_text=phrase, is_raw_pcm=True)
 
         if stt_result["success"]:
             transcribed = stt_result["transcription"]
@@ -309,9 +334,9 @@ async def run_integration_test(client: genai.Client):
 
     print(f"     {Colors.GREEN}OK{Colors.RESET} - {tts_result['audio_size']:,} bytes")
 
-    # Step 2: STT - transcribe user audio
+    # Step 2: STT - transcribe user audio (TTS outputs raw PCM)
     print(f"\n  2. Transcribing user audio...")
-    stt_result = await test_stt(client, tts_result["audio_data"])
+    stt_result = await test_stt(client, tts_result["audio_data"], is_raw_pcm=True)
     if not stt_result["success"]:
         print(f"     {Colors.RED}FAIL{Colors.RESET} - STT failed")
         return 0, 1
@@ -341,10 +366,10 @@ async def main():
     parser.add_argument("--integration", action="store_true", help="Run integration test only")
     args = parser.parse_args()
 
-    # Check API key
-    api_key = os.getenv("GEMINI_API_KEY")
+    # Check API key (support both names)
+    api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
     if not api_key:
-        print(f"{Colors.RED}Error: GEMINI_API_KEY not set{Colors.RESET}")
+        print(f"{Colors.RED}Error: GOOGLE_API_KEY or GEMINI_API_KEY not set{Colors.RESET}")
         print("Set it in .env file or environment variable")
         return
 

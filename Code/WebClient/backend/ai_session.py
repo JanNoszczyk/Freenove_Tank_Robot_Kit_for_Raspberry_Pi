@@ -28,10 +28,10 @@ load_dotenv(find_dotenv())
 logger = logging.getLogger("ai_session")
 
 # Model configuration
-STT_MODEL = "gemini-2.5-flash"  # Speech-to-text model
-TTS_MODEL = "gemini-2.5-flash"  # Text-to-speech model
-TTS_VOICE = "Puck"
-AGENT_MODEL = "gemini-3-flash-preview"  # Agent reasoning (latest, higher rate limits)
+STT_MODEL = "gemini-3-flash-preview"  # Speech-to-text (transcription)
+TTS_MODEL = "gemini-2.5-flash-preview-tts"  # Dedicated TTS model
+TTS_VOICE = "Puck"  # One of 30 available voices
+AGENT_MODEL = "gemini-3-flash-preview"  # Agent reasoning (latest)
 
 # Safety constants
 ULTRASONIC_STALE_THRESHOLD = 2.0
