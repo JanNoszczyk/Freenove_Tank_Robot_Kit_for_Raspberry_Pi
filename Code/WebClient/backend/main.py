@@ -242,6 +242,21 @@ async def control_gripper(request: GripperRequest):
     return {"action": request.action}
 
 
+@app.post("/api/shutdown")
+async def shutdown_robot():
+    """Shutdown the Raspberry Pi."""
+    import subprocess
+    # First stop all motors for safety
+    if robot.connected:
+        robot.stop()
+    # Execute shutdown command
+    try:
+        subprocess.run(["sudo", "shutdown", "now"], check=False)
+        return {"shutdown": True}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Shutdown failed: {e}")
+
+
 @app.get("/api/ultrasonic")
 async def get_ultrasonic():
     """Get ultrasonic distance (also triggers request)."""

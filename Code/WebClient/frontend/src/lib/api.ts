@@ -22,4 +22,5 @@ export const api = {
     post('/led', { mode, r, g, b, mask }),
   setMode: (mode: number) => post('/mode', { mode }),
   gripper: (action: number) => post('/gripper', { action }),
+  shutdown: () => post('/shutdown'),
 }

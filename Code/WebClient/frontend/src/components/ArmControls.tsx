@@ -5,21 +5,21 @@ import { Slider } from '@/components/ui/slider'
 import { Label } from '@/components/ui/label'
 import { useRobotStore } from '@/stores/robotStore'
 import { api } from '@/lib/api'
-import { Home } from 'lucide-react'
+import { Home, GripVertical } from 'lucide-react'
 
-// Servo ranges
-const PAN_MIN = 30
-const PAN_MAX = 150
-const PAN_CENTER = 90
+// Arm servo ranges
+const ARM_HORIZONTAL_MIN = 30
+const ARM_HORIZONTAL_MAX = 150
+const ARM_HORIZONTAL_CENTER = 90
 
-const TILT_MIN = 90
-const TILT_MAX = 150
-const TILT_CENTER = 120
+const ARM_VERTICAL_MIN = 90
+const ARM_VERTICAL_MAX = 150
+const ARM_VERTICAL_CENTER = 120
 
-export function CameraControls() {
+export function ArmControls() {
   const { connected, servo1Angle, servo2Angle, setServo1Angle, setServo2Angle } = useRobotStore()
 
-  const handlePan = useCallback(
+  const handleHorizontal = useCallback(
     async (value: number[]) => {
       const angle = value[0]
       setServo1Angle(angle)
@@ -34,7 +34,7 @@ export function CameraControls() {
     [connected, setServo1Angle]
   )
 
-  const handleTilt = useCallback(
+  const handleVertical = useCallback(
     async (value: number[]) => {
       const angle = value[0]
       setServo2Angle(angle)
@@ -50,12 +50,12 @@ export function CameraControls() {
   )
 
   const handleHome = useCallback(async () => {
-    setServo1Angle(PAN_CENTER)
-    setServo2Angle(TILT_CENTER)
+    setServo1Angle(ARM_HORIZONTAL_CENTER)
+    setServo2Angle(ARM_VERTICAL_CENTER)
     if (connected) {
       try {
-        await api.servo(0, PAN_CENTER)
-        await api.servo(1, TILT_CENTER)
+        await api.servo(0, ARM_HORIZONTAL_CENTER)
+        await api.servo(1, ARM_VERTICAL_CENTER)
       } catch (e) {
         console.error('Servo error:', e)
       }
@@ -65,36 +65,39 @@ export function CameraControls() {
   return (
     <Card>
       <CardHeader className="pb-2">
-        <CardTitle className="text-lg">Camera</CardTitle>
+        <CardTitle className="text-lg flex items-center gap-2">
+          <GripVertical className="h-5 w-5" />
+          Arm
+        </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
-        {/* Pan (horizontal) */}
+        {/* Clamp position (horizontal) */}
         <div className="space-y-2">
           <div className="flex items-center justify-between">
-            <Label>Pan (L/R)</Label>
+            <Label>Clamp position (J/L)</Label>
             <span className="text-sm text-muted-foreground">{servo1Angle}°</span>
           </div>
           <Slider
             value={[servo1Angle]}
-            onValueChange={handlePan}
-            min={PAN_MIN}
-            max={PAN_MAX}
+            onValueChange={handleHorizontal}
+            min={ARM_HORIZONTAL_MIN}
+            max={ARM_HORIZONTAL_MAX}
             step={1}
             disabled={!connected}
           />
         </div>
 
-        {/* Tilt (vertical) */}
+        {/* Vertical position */}
         <div className="space-y-2">
           <div className="flex items-center justify-between">
-            <Label>Tilt (U/D)</Label>
+            <Label>Lift (I/K)</Label>
             <span className="text-sm text-muted-foreground">{servo2Angle}°</span>
           </div>
           <Slider
             value={[servo2Angle]}
-            onValueChange={handleTilt}
-            min={TILT_MIN}
-            max={TILT_MAX}
+            onValueChange={handleVertical}
+            min={ARM_VERTICAL_MIN}
+            max={ARM_VERTICAL_MAX}
             step={1}
             disabled={!connected}
           />
@@ -109,12 +112,8 @@ export function CameraControls() {
           onClick={handleHome}
         >
           <Home className="h-4 w-4 mr-2" />
-          Home
+          Home Position
         </Button>
-
-        <p className="text-xs text-muted-foreground text-center">
-          IJKL keys
-        </p>
       </CardContent>
     </Card>
   )

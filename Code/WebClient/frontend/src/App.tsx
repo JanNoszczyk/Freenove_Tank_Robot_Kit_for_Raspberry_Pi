@@ -1,12 +1,12 @@
 import { ConnectionPanel } from '@/components/ConnectionPanel'
 import { VideoStream } from '@/components/VideoStream'
 import { MovementControls } from '@/components/MovementControls'
-import { CameraControls } from '@/components/CameraControls'
+import { ArmControls } from '@/components/ArmControls'
 import { LEDPanel } from '@/components/LEDPanel'
 import { ModeSelector } from '@/components/ModeSelector'
-import { GripperControls } from '@/components/GripperControls'
 import { SensorDisplay } from '@/components/SensorDisplay'
 import { AIChat } from '@/components/AIChat'
+import { EmergencyStop } from '@/components/EmergencyStop'
 import { useKeyboardControls } from '@/hooks/useKeyboardControls'
 import { useRobotStore } from '@/stores/robotStore'
 import './index.css'
@@ -22,11 +22,14 @@ function App() {
         {/* Header */}
         <header className="flex items-center justify-between">
           <h1 className="text-2xl font-bold">Tank Robot Control</h1>
-          {!isAIMode && (
-            <div className="text-sm text-muted-foreground">
-              WASD: Move | IJKL: Camera | O/P: Gripper
-            </div>
-          )}
+          <div className="flex items-center gap-4">
+            {!isAIMode && (
+              <div className="text-sm text-muted-foreground">
+                WASD: Move | IJKL: Arm | O/P: Gripper
+              </div>
+            )}
+            <EmergencyStop />
+          </div>
         </header>
 
         {/* Main Grid */}
@@ -48,9 +51,8 @@ function App() {
               /* Manual Mode: Show all controls */
               <>
                 <MovementControls />
-                <CameraControls />
+                <ArmControls />
                 <LEDPanel />
-                <GripperControls />
                 <SensorDisplay />
               </>
             )}

@@ -1,123 +1,102 @@
-import { useRef, useCallback } from 'react'
+import { useCallback, useRef, useEffect } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Button } from '@/components/ui/button'
 import { useRobotStore } from '@/stores/robotStore'
 import { api } from '@/lib/api'
-import { ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Square } from 'lucide-react'
+import { Joystick } from './Joystick'
 
-const MOTOR_SPEED = 2000
+const MAX_SPEED = 4000
+const SEND_INTERVAL = 50 // Send commands every 50ms
 
 export function MovementControls() {
   const { connected } = useRobotStore()
-  const activeRef = useRef(false)
+  const targetRef = useRef({ left: 0, right: 0 })
+  const lastSentRef = useRef({ left: 0, right: 0 })
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const isDraggingRef = useRef(false)
 
-  const sendMotor = useCallback(async (left: number, right: number) => {
+  // Continuously send motor commands while dragging
+  useEffect(() => {
     if (!connected) return
-    try {
-      await api.motor(left, right)
-    } catch (e) {
-      console.error('Motor error:', e)
+
+    intervalRef.current = setInterval(async () => {
+      if (!isDraggingRef.current) return
+
+      const { left, right } = targetRef.current
+
+      // Only send if values changed
+      if (left === lastSentRef.current.left && right === lastSentRef.current.right) {
+        return
+      }
+
+      lastSentRef.current = { left, right }
+
+      try {
+        await api.motor(left, right)
+      } catch (e) {
+        console.error('Motor error:', e)
+      }
+    }, SEND_INTERVAL)
+
+    return () => {
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current)
+        intervalRef.current = null
+      }
     }
   }, [connected])
 
-  const handlePointerDown = (left: number, right: number) => {
-    if (!connected) return
-    activeRef.current = true
-    sendMotor(left, right)
-  }
+  const handleMove = useCallback((x: number, y: number) => {
+    isDraggingRef.current = true
 
-  const handlePointerUp = () => {
-    if (activeRef.current) {
-      activeRef.current = false
-      sendMotor(0, 0)
+    // Tank drive: y = forward/back, x = turn
+    // Simple arcade-to-tank conversion
+    const forward = y * MAX_SPEED
+    const turn = x * MAX_SPEED
+
+    // Mix forward and turn
+    let left = forward + turn
+    let right = forward - turn
+
+    // Normalize if over max
+    const maxVal = Math.max(Math.abs(left), Math.abs(right))
+    if (maxVal > MAX_SPEED) {
+      const scale = MAX_SPEED / maxVal
+      left *= scale
+      right *= scale
     }
-  }
 
-  const handleStop = async () => {
+    targetRef.current = {
+      left: Math.round(left),
+      right: Math.round(right),
+    }
+  }, [])
+
+  const handleRelease = useCallback(async () => {
+    isDraggingRef.current = false
+    targetRef.current = { left: 0, right: 0 }
+    lastSentRef.current = { left: -1, right: -1 } // Force next send
+
+    // Immediately stop
     try {
-      await api.stop()
+      await api.motor(0, 0)
     } catch (e) {
-      console.error('Stop error:', e)
+      console.error('Motor error:', e)
     }
-  }
+  }, [])
 
   return (
     <Card>
       <CardHeader className="pb-2">
         <CardTitle className="text-lg">Movement</CardTitle>
       </CardHeader>
-      <CardContent>
-        <div className="grid grid-cols-3 gap-2 w-fit mx-auto">
-          {/* Row 1: Forward */}
-          <div />
-          <Button
-            size="lg"
-            variant="secondary"
-            disabled={!connected}
-            onPointerDown={() => handlePointerDown(MOTOR_SPEED, MOTOR_SPEED)}
-            onPointerUp={handlePointerUp}
-            onPointerLeave={handlePointerUp}
-            className="touch-none"
-            aria-label="Forward"
-          >
-            <ArrowUp className="h-6 w-6" />
-          </Button>
-          <div />
-
-          {/* Row 2: Left, Stop, Right */}
-          <Button
-            size="lg"
-            variant="secondary"
-            disabled={!connected}
-            onPointerDown={() => handlePointerDown(-MOTOR_SPEED, MOTOR_SPEED)}
-            onPointerUp={handlePointerUp}
-            onPointerLeave={handlePointerUp}
-            className="touch-none"
-            aria-label="Turn Left"
-          >
-            <ArrowLeft className="h-6 w-6" />
-          </Button>
-          <Button
-            size="lg"
-            variant="destructive"
-            disabled={!connected}
-            onClick={handleStop}
-            aria-label="Stop"
-          >
-            <Square className="h-6 w-6" />
-          </Button>
-          <Button
-            size="lg"
-            variant="secondary"
-            disabled={!connected}
-            onPointerDown={() => handlePointerDown(MOTOR_SPEED, -MOTOR_SPEED)}
-            onPointerUp={handlePointerUp}
-            onPointerLeave={handlePointerUp}
-            className="touch-none"
-            aria-label="Turn Right"
-          >
-            <ArrowRight className="h-6 w-6" />
-          </Button>
-
-          {/* Row 3: Backward */}
-          <div />
-          <Button
-            size="lg"
-            variant="secondary"
-            disabled={!connected}
-            onPointerDown={() => handlePointerDown(-MOTOR_SPEED, -MOTOR_SPEED)}
-            onPointerUp={handlePointerUp}
-            onPointerLeave={handlePointerUp}
-            className="touch-none"
-            aria-label="Backward"
-          >
-            <ArrowDown className="h-6 w-6" />
-          </Button>
-          <div />
-        </div>
-        <p className="text-xs text-muted-foreground text-center mt-2">
-          Use WASD or Arrow keys
-        </p>
+      <CardContent className="flex flex-col items-center">
+        <Joystick
+          size={150}
+          onMove={handleMove}
+          onRelease={handleRelease}
+          disabled={!connected}
+          label="WASD or drag"
+        />
       </CardContent>
     </Card>
   )

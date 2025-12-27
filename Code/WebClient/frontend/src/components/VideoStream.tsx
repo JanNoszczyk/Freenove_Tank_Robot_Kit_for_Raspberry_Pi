@@ -22,6 +22,7 @@ export function VideoStream() {
               src={videoUrl}
               alt="Robot camera"
               className="w-full h-full object-contain"
+              style={{ transform: 'rotate(180deg)' }}
             />
           ) : (
             <div className="text-muted-foreground text-sm">

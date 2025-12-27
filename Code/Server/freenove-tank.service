@@ -1,0 +1,17 @@
+[Unit]
+Description=Freenove Tank Robot Server
+After=network.target pigpiod.service
+Wants=pigpiod.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/pi/Freenove_Tank_Robot_Kit_for_Raspberry_Pi/Code/Server
+Environment=DISPLAY=:0
+ExecStartPre=/bin/sleep 5
+ExecStart=/usr/bin/python3 main.py --headless
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -80,6 +80,9 @@ class mywindow(QMainWindow, Ui_server_ui):
         self.gamepad_last_home_pressed = False         # Track Home button
         self.gamepad_speed_level = 2                   # Speed level 0-4 (0=25%, 1=50%, 2=75%, 3=100%, 4=turbo)
         self.gamepad_last_dpad_y = 0                   # Track D-pad for edge detection
+        self.gamepad_override_active = False           # True when joystick overrides autonomous mode
+        self.gamepad_saved_mode = 1                    # Saved mode to resume after override
+        self.gamepad_idle_time = 0                     # Time since last joystick input
 
         # LiDAR state (private, underscore prefix)
         self._lidar = None                             # TFMiniS sensor instance
@@ -364,11 +367,18 @@ class mywindow(QMainWindow, Ui_server_ui):
         self._lidar_available = False
 
     def threading_gamepad(self):
-        """Main loop that reads gamepad and controls the robot."""
+        """Main loop that reads gamepad and controls the robot.
+
+        JOYSTICK ALWAYS HAS PRIORITY:
+        - When joystick input is detected during autonomous modes (2-3),
+          the autonomous task is paused and joystick takes control.
+        - After 2 seconds of joystick idle, autonomous mode resumes.
+        """
         MOTOR_BASE = 3000  # Base motor speed (not full 4095 for safety)
         SPEED_MULTIPLIERS = [0.25, 0.50, 0.75, 1.0, 1.25]  # Speed levels 0-4
         SERVO_SPEED = 2   # Degrees per update for arm movement
         LOOP_INTERVAL = 0.02  # 50Hz target
+        OVERRIDE_RESUME_DELAY = 2.0  # Seconds of idle before resuming auto mode
         was_connected = False  # Track connection state for disconnect detection
 
         while self.gamepad_thread_is_running:
@@ -405,10 +415,51 @@ class mywindow(QMainWindow, Ui_server_ui):
                 self.gamepad_last_lb_pressed = False
                 self.gamepad_last_home_pressed = False
                 self.gamepad_last_dpad_y = 0
-                # Ensure free mode for manual control
-                self.car_mode = 1
+                self.gamepad_override_active = False
+                self.gamepad_idle_time = 0
+                # Don't force mode 1 - let current mode continue
                 self.gamepad_pinch_active = False
                 self.gamepad_drop_active = False
+
+            # === JOYSTICK INPUT DETECTION ===
+            # Check if there's any significant joystick input (sticks or triggers)
+            has_stick_input = (abs(state.left_stick_x) > 0.1 or
+                               abs(state.left_stick_y) > 0.1 or
+                               abs(state.right_stick_x) > 0.1 or
+                               abs(state.right_stick_y) > 0.1)
+            has_button_input = (state.button_a or state.button_b or state.button_x or
+                                state.button_y or state.button_lb or state.button_rb or
+                                state.button_home or state.left_trigger > 0.5 or
+                                state.right_trigger > 0.5)
+            has_input = has_stick_input or has_button_input
+
+            # === AUTONOMOUS MODE OVERRIDE LOGIC ===
+            # If in autonomous mode (2=ultrasonic, 3=infrared) and joystick moved
+            if self.car_mode in [2, 3] and has_stick_input:
+                if not self.gamepad_override_active:
+                    # Save current mode and take control
+                    self.gamepad_saved_mode = self.car_mode
+                    self.car_mode = 1  # Switch to manual
+                    self.gamepad_override_active = True
+                    self.car.infrared_run_stop = True  # Pause infrared if running
+                    print(f"Gamepad: OVERRIDE - pausing mode {self.gamepad_saved_mode}")
+                self.gamepad_idle_time = 0  # Reset idle timer
+
+            # Track idle time when override is active
+            if self.gamepad_override_active:
+                if has_input:
+                    self.gamepad_idle_time = 0
+                else:
+                    self.gamepad_idle_time += LOOP_INTERVAL
+
+                # Resume autonomous mode after idle period
+                if self.gamepad_idle_time >= OVERRIDE_RESUME_DELAY:
+                    print(f"Gamepad: Resuming mode {self.gamepad_saved_mode}")
+                    self.car_mode = self.gamepad_saved_mode
+                    if self.gamepad_saved_mode == 3:
+                        self.car.infrared_run_stop = False  # Resume infrared
+                    self.gamepad_override_active = False
+                    self.gamepad_idle_time = 0
 
             # === D-PAD SPEED CONTROL ===
             # D-pad Up = increase speed, D-pad Down = decrease speed
@@ -424,8 +475,8 @@ class mywindow(QMainWindow, Ui_server_ui):
             # Calculate effective max speed based on current level
             motor_max = int(MOTOR_BASE * SPEED_MULTIPLIERS[self.gamepad_speed_level])
 
-            # Only control motors in free mode (mode 1)
-            if self.car_mode == 1:
+            # Control motors in free mode OR during joystick override
+            if self.car_mode == 1 or self.gamepad_override_active:
                 # === TANK DRIVE ===
                 # Left stick controls movement
                 forward = -state.left_stick_y  # Inverted: stick up = forward
@@ -451,8 +502,8 @@ class mywindow(QMainWindow, Ui_server_ui):
                     self.right_wheel_speed = right_speed
                     self.car.motor.setMotorModel(left_speed, right_speed)
 
-            # === ARM CONTROL (Right stick - works in free mode) ===
-            if self.car_mode == 1:
+            # === ARM CONTROL (Right stick - works in free mode or override) ===
+            if self.car_mode == 1 or self.gamepad_override_active:
                 # Right stick X = Clamp open/close (Servo 0)
                 if abs(state.right_stick_x) > 0.1:
                     self.gamepad_servo0_angle += state.right_stick_x * SERVO_SPEED
@@ -499,7 +550,7 @@ class mywindow(QMainWindow, Ui_server_ui):
             self.gamepad_last_lt_pressed = lt_pressed
 
             # === BUTTON ACTIONS ===
-            # A button = Emergency stop (stop motors, return to free mode)
+            # A button = Emergency stop (stop motors, return to free mode, cancel override)
             if state.button_a and not self.gamepad_last_a_pressed:
                 print("Gamepad: STOP (A)")
                 self.car.motor.setMotorModel(0, 0)
@@ -507,6 +558,8 @@ class mywindow(QMainWindow, Ui_server_ui):
                 self.right_wheel_speed = 0
                 self.gamepad_pinch_active = False
                 self.gamepad_drop_active = False
+                self.gamepad_override_active = False  # Cancel any override
+                self.car.infrared_run_stop = True     # Stop infrared if running
                 self.car_mode = 1  # Return to free mode
             self.gamepad_last_a_pressed = state.button_a
 
@@ -698,7 +751,145 @@ class mywindow(QMainWindow, Ui_server_ui):
         if not self.ui_button_state and not self.cmd_thread_is_running and not self.video_thread_is_running and not self.led_process_is_running and not self.action_process_is_running:  # If all threads and processes are stopped
             self.app.quit()              # Quit the application
 
-if __name__ == '__main__':        # Entry point of the script
-    myshow = mywindow()           # Create an instance of the main window
-    myshow.show()                 # Show the main window
-    sys.exit(myshow.app.exec_())  # Run the application and exit with the appropriate status code
+class HeadlessServer:
+    """Headless server mode - runs without GUI for systemd/auto-start."""
+
+    def __init__(self):
+        self.tcp_server = TankServer()
+        self.command = Command()
+        self.led = Led()
+        self.car = Car()
+        self.camera = Camera(stream_size=(400, 300))
+        self.queue_cmd = multiprocessing.Queue()
+        self.cmd_parser = MessageParser()
+        self.queue_led = multiprocessing.Queue()
+        self.led_parser = MessageParser()
+        self.gamepad = Gamepad(deadzone=0.15)
+
+        # Thread control flags
+        self.running = True
+        self.cmd_thread_is_running = False
+        self.video_thread_is_running = False
+        self.car_thread_is_running = False
+        self.led_process_is_running = False
+        self.gamepad_thread_is_running = False
+        self._lidar_thread_is_running = False
+
+        # Car state
+        self.car_mode = 1
+        self.car_last_mode = 1
+        self.left_wheel_speed = 0
+        self.right_wheel_speed = 0
+
+        # Gamepad state (same as GUI version)
+        self.gamepad_servo0_angle = 90
+        self.gamepad_servo1_angle = 140
+        self.gamepad_led_mode = 0
+        self.gamepad_last_rt_pressed = False
+        self.gamepad_last_lt_pressed = False
+        self.gamepad_last_y_pressed = False
+        self.gamepad_last_a_pressed = False
+        self.gamepad_last_b_pressed = False
+        self.gamepad_last_x_pressed = False
+        self.gamepad_last_rb_pressed = False
+        self.gamepad_last_lb_pressed = False
+        self.gamepad_pinch_active = False
+        self.gamepad_drop_active = False
+        self.gamepad_last_home_pressed = False
+        self.gamepad_speed_level = 2
+        self.gamepad_last_dpad_y = 0
+        self.gamepad_override_active = False
+        self.gamepad_saved_mode = 1
+        self.gamepad_idle_time = 0
+
+        # LiDAR state
+        self._lidar = None
+        self._lidar_distance = 0
+        self._lidar_lock = threading.Lock()
+        self._lidar_available = False
+
+        # Signal handling
+        signal.signal(signal.SIGINT, self.signal_handler)
+        signal.signal(signal.SIGTERM, self.signal_handler)
+
+    def signal_handler(self, sig, frame):
+        print(f"\nReceived signal {sig}, shutting down...")
+        self.running = False
+        self.stop()
+        sys.exit(0)
+
+    def start(self):
+        """Start all server threads."""
+        print("=" * 50)
+        print("Freenove Tank Robot - HEADLESS MODE")
+        print("=" * 50)
+
+        self.tcp_server.startTcpServer()
+
+        # Start threads
+        self.cmd_thread_is_running = True
+        threading.Thread(target=self.threading_cmd_receive, daemon=True).start()
+
+        self.video_thread_is_running = True
+        threading.Thread(target=self.threading_video_send, daemon=True).start()
+
+        self.car_thread_is_running = True
+        threading.Thread(target=self.threading_car_task, daemon=True).start()
+
+        self.led_process_is_running = True
+        multiprocessing.Process(target=self.process_led_running, args=(self.queue_led,), daemon=True).start()
+
+        self.gamepad_thread_is_running = True
+        self.gamepad.start()
+        threading.Thread(target=self.threading_gamepad, daemon=True).start()
+
+        self._lidar_thread_is_running = True
+        threading.Thread(target=self.threading_lidar, daemon=True).start()
+
+        print("Server started. Press Ctrl+C to stop.")
+        print(f"  TCP Command Port: 5003")
+        print(f"  TCP Video Port: 8003")
+        print("=" * 50)
+
+        # Main loop - keep running until signal
+        while self.running:
+            time.sleep(1)
+
+    def stop(self):
+        """Stop all threads and cleanup."""
+        print("Stopping server...")
+        self.cmd_thread_is_running = False
+        self.video_thread_is_running = False
+        self.car_thread_is_running = False
+        self.led_process_is_running = False
+        self.gamepad_thread_is_running = False
+        self._lidar_thread_is_running = False
+
+        self.gamepad.stop()
+        self.tcp_server.stopTcpServer()
+        self.led.colorWipe([0, 0, 0])
+        self.camera.stop_stream()
+        self.camera.close()
+        self.car.close()
+        print("Server stopped.")
+
+    # Copy the thread methods from mywindow class
+    threading_cmd_receive = mywindow.threading_cmd_receive
+    threading_video_send = mywindow.threading_video_send
+    threading_car_task = mywindow.threading_car_task
+    threading_gamepad = mywindow.threading_gamepad
+    threading_lidar = mywindow.threading_lidar
+    process_led_running = mywindow.process_led_running
+    _apply_lidar_limit = mywindow._apply_lidar_limit
+
+
+if __name__ == '__main__':
+    # Check for --headless flag
+    if '--headless' in sys.argv:
+        server = HeadlessServer()
+        server.start()
+    else:
+        # GUI mode
+        myshow = mywindow()
+        myshow.show()
+        sys.exit(myshow.app.exec_())

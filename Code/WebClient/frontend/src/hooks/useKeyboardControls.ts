@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react'
 import { api } from '@/lib/api'
 import { useRobotStore } from '@/stores/robotStore'
 
-const MOTOR_SPEED = 2000
+const MOTOR_SPEED = 4000
 
 export function useKeyboardControls() {
   const { connected, servo1Angle, servo2Angle, setServo1Angle, setServo2Angle } = useRobotStore()
@@ -61,17 +61,17 @@ export function useKeyboardControls() {
 
       const key = e.key.toLowerCase()
 
-      // Camera controls with IJKL (I=up, K=down, J=left, L=right)
+      // Arm controls with IJKL (I=up, K=down, J=left, L=right)
       // Use refs for current values to avoid stale closures
       if (key === 'i') {
-        const newAngle = Math.min(150, servo2Ref.current + 5)
+        const newAngle = Math.min(150, servo2Ref.current + 10)
         servo2Ref.current = newAngle
         setServo2Angle(newAngle)
         api.servo(1, newAngle).catch(console.error)
         return
       }
       if (key === 'k') {
-        const newAngle = Math.max(90, servo2Ref.current - 5)
+        const newAngle = Math.max(90, servo2Ref.current - 10)
         servo2Ref.current = newAngle
         setServo2Angle(newAngle)
         api.servo(1, newAngle).catch(console.error)
@@ -79,7 +79,7 @@ export function useKeyboardControls() {
       }
       if (key === 'j') {
         // Left = decrease servo1
-        const newAngle = Math.max(90, servo1Ref.current - 5)
+        const newAngle = Math.max(30, servo1Ref.current - 10)
         servo1Ref.current = newAngle
         setServo1Angle(newAngle)
         api.servo(0, newAngle).catch(console.error)
@@ -87,7 +87,7 @@ export function useKeyboardControls() {
       }
       if (key === 'l') {
         // Right = increase servo1
-        const newAngle = Math.min(150, servo1Ref.current + 5)
+        const newAngle = Math.min(150, servo1Ref.current + 10)
         servo1Ref.current = newAngle
         setServo1Angle(newAngle)
         api.servo(0, newAngle).catch(console.error)
@@ -104,14 +104,14 @@ export function useKeyboardControls() {
         return
       }
 
-      // Home key resets camera
+      // Home key resets arm position
       if (key === 'home') {
         servo1Ref.current = 90
-        servo2Ref.current = 140
+        servo2Ref.current = 120
         setServo1Angle(90)
-        setServo2Angle(140)
+        setServo2Angle(120)
         api.servo(0, 90).catch(console.error)
-        api.servo(1, 140).catch(console.error)
+        api.servo(1, 120).catch(console.error)
         return
       }
 

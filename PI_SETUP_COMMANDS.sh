@@ -9,7 +9,8 @@
 #   bash PI_SETUP_COMMANDS.sh              # Phase 1: Install dependencies
 #   sudo reboot                            # Reboot after Phase 1
 #   bash PI_SETUP_COMMANDS.sh --post-reboot    # Phase 2: Post-reboot setup
-#   bash PI_SETUP_COMMANDS.sh --setup-autostart # Optional: Auto-start on boot
+#   bash PI_SETUP_COMMANDS.sh --setup-systemd   # RECOMMENDED: Headless auto-start
+#   bash PI_SETUP_COMMANDS.sh --setup-autostart # Optional: Desktop auto-start
 #   bash PI_SETUP_COMMANDS.sh --install-client  # Optional: Install Pi client GUI
 #   bash PI_SETUP_COMMANDS.sh --arm-calibration  # Calibrate servos for arm assembly
 # =============================================================================
@@ -68,11 +69,52 @@ if [ "$1" == "--arm-calibration" ]; then
 fi
 
 # -----------------------------------------------------------------------------
-# OPTIONAL: Setup Auto-Start on Boot
+# RECOMMENDED: Setup systemd service for headless auto-start
+# -----------------------------------------------------------------------------
+if [ "$1" == "--setup-systemd" ]; then
+    echo ""
+    echo "[SYSTEMD] Setting up headless auto-start service..."
+    echo ""
+    echo "This method works on headless Pi (no desktop required)."
+    echo ""
+
+    # Enable pigpiod service (required for V1.0 PCB)
+    sudo systemctl enable pigpiod
+    sudo systemctl start pigpiod
+
+    # Copy service file
+    sudo cp ~/Freenove_Tank_Robot_Kit_for_Raspberry_Pi/Code/Server/freenove-tank.service /etc/systemd/system/
+
+    # Reload systemd and enable service
+    sudo systemctl daemon-reload
+    sudo systemctl enable freenove-tank.service
+
+    echo ""
+    echo "[SYSTEMD] Complete! Server will auto-start on boot."
+    echo ""
+    echo "Manage the service with:"
+    echo "  sudo systemctl start freenove-tank    # Start now"
+    echo "  sudo systemctl stop freenove-tank     # Stop"
+    echo "  sudo systemctl restart freenove-tank  # Restart"
+    echo "  sudo systemctl status freenove-tank   # Check status"
+    echo "  sudo journalctl -u freenove-tank -f   # View logs"
+    echo ""
+    echo "To disable auto-start:"
+    echo "  sudo systemctl disable freenove-tank"
+    echo ""
+    echo "Start the service now with: sudo systemctl start freenove-tank"
+    exit 0
+fi
+
+# -----------------------------------------------------------------------------
+# OPTIONAL: Setup Auto-Start on Boot (Desktop mode - requires display)
 # -----------------------------------------------------------------------------
 if [ "$1" == "--setup-autostart" ]; then
     echo ""
-    echo "[AUTOSTART] Setting up server auto-start..."
+    echo "[AUTOSTART] Setting up desktop auto-start (requires display)..."
+    echo ""
+    echo "NOTE: For headless Pi, use --setup-systemd instead!"
+    echo ""
 
     # Create start.sh with pigpiod for V1.0 PCB
     cat > ~/start.sh << STARTSH
@@ -166,11 +208,18 @@ if [ "$1" == "--post-reboot" ]; then
     echo "Plug USB dongle in BEFORE starting server!"
     echo ""
     echo "=============================================="
-    echo "OPTIONAL SETUP"
+    echo "AUTO-START OPTIONS"
     echo "=============================================="
     echo ""
-    echo "Auto-start server on boot:"
+    echo "RECOMMENDED - Headless auto-start (works without display):"
+    echo "  bash PI_SETUP_COMMANDS.sh --setup-systemd"
+    echo ""
+    echo "ALTERNATIVE - Desktop auto-start (requires display):"
     echo "  bash PI_SETUP_COMMANDS.sh --setup-autostart"
+    echo ""
+    echo "=============================================="
+    echo "OTHER OPTIONS"
+    echo "=============================================="
     echo ""
     echo "Install Client GUI on Pi (to control from Pi desktop):"
     echo "  bash PI_SETUP_COMMANDS.sh --install-client"
