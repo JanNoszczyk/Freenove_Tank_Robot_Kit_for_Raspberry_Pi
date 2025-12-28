@@ -54,9 +54,9 @@ export const useRobotStore = create<RobotState>((set) => ({
   videoUrl: null,
   setVideoUrl: (videoUrl) => set({ videoUrl }),
 
-  // Servos (servo2 default is 140 to match PyQt)
+  // Servos (servo2 default is 150 = park position, arm fully up)
   servo1Angle: 90,
-  servo2Angle: 140,
+  servo2Angle: 150,
   setServo1Angle: (servo1Angle) => set({ servo1Angle }),
   setServo2Angle: (servo2Angle) => set({ servo2Angle }),
 

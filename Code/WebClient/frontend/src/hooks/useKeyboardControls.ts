@@ -104,14 +104,14 @@ export function useKeyboardControls() {
         return
       }
 
-      // Home key resets arm position
+      // Home key parks arm (up and centered, out of camera view)
       if (key === 'home') {
         servo1Ref.current = 90
-        servo2Ref.current = 120
+        servo2Ref.current = 150
         setServo1Angle(90)
-        setServo2Angle(120)
+        setServo2Angle(150)
         api.servo(0, 90).catch(console.error)
-        api.servo(1, 120).catch(console.error)
+        api.servo(1, 150).catch(console.error)
         return
       }
 

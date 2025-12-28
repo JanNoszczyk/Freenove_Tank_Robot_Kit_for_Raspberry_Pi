@@ -10,8 +10,24 @@ import { api } from '@/lib/api'
 const STORAGE_KEY = 'robot-last-ip'
 const DEFAULT_HOSTS = ['raspberrypi.local', '192.168.4.1']
 
+// Park position: arm up and centered (out of camera view)
+const PARK_CLAMP = 90   // Centered
+const PARK_LIFT = 150   // Fully up
+
+// Initialize arm to park position after connection
+async function parkArm(setServo1Angle: (a: number) => void, setServo2Angle: (a: number) => void) {
+  try {
+    await api.servo(0, PARK_CLAMP)
+    await api.servo(1, PARK_LIFT)
+    setServo1Angle(PARK_CLAMP)
+    setServo2Angle(PARK_LIFT)
+  } catch (e) {
+    console.error('Failed to park arm:', e)
+  }
+}
+
 export function ConnectionPanel() {
-  const { ip, setIp, connected, setConnected } = useRobotStore()
+  const { ip, setIp, connected, setConnected, setServo1Angle, setServo2Angle } = useRobotStore()
   const [loading, setLoading] = useState(false)
   const [autoConnecting, setAutoConnecting] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -38,6 +54,8 @@ export function ConnectionPanel() {
           setIp(host)
           setConnected(true)
           localStorage.setItem(STORAGE_KEY, host)
+          // Park arm to clear camera view
+          await parkArm(setServo1Angle, setServo2Angle)
           setAutoConnecting(false)
           return
         } catch {
@@ -50,7 +68,7 @@ export function ConnectionPanel() {
     }
 
     tryAutoConnect()
-  }, [connected, setIp, setConnected])
+  }, [connected, setIp, setConnected, setServo1Angle, setServo2Angle])
 
   const handleConnect = async () => {
     if (connected) {
@@ -70,6 +88,8 @@ export function ConnectionPanel() {
         await api.connect(ip)
         setConnected(true)
         localStorage.setItem(STORAGE_KEY, ip)
+        // Park arm to clear camera view
+        await parkArm(setServo1Angle, setServo2Angle)
       } catch (e) {
         setError('Failed to connect')
         console.error('Connect error:', e)

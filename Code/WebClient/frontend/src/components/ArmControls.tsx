@@ -5,16 +5,18 @@ import { Slider } from '@/components/ui/slider'
 import { Label } from '@/components/ui/label'
 import { useRobotStore } from '@/stores/robotStore'
 import { api } from '@/lib/api'
-import { Home, GripVertical } from 'lucide-react'
+import { ParkingCircle, GripVertical } from 'lucide-react'
 
 // Arm servo ranges
 const ARM_HORIZONTAL_MIN = 30
 const ARM_HORIZONTAL_MAX = 150
-const ARM_HORIZONTAL_CENTER = 90
 
 const ARM_VERTICAL_MIN = 90
 const ARM_VERTICAL_MAX = 150
-const ARM_VERTICAL_CENTER = 120
+
+// Park position: arm fully up and centered (out of camera view)
+const PARK_CLAMP = 90   // Centered
+const PARK_LIFT = 150   // Fully up
 
 export function ArmControls() {
   const { connected, servo1Angle, servo2Angle, setServo1Angle, setServo2Angle } = useRobotStore()
@@ -49,13 +51,13 @@ export function ArmControls() {
     [connected, setServo2Angle]
   )
 
-  const handleHome = useCallback(async () => {
-    setServo1Angle(ARM_HORIZONTAL_CENTER)
-    setServo2Angle(ARM_VERTICAL_CENTER)
+  const handlePark = useCallback(async () => {
+    setServo1Angle(PARK_CLAMP)
+    setServo2Angle(PARK_LIFT)
     if (connected) {
       try {
-        await api.servo(0, ARM_HORIZONTAL_CENTER)
-        await api.servo(1, ARM_VERTICAL_CENTER)
+        await api.servo(0, PARK_CLAMP)
+        await api.servo(1, PARK_LIFT)
       } catch (e) {
         console.error('Servo error:', e)
       }
@@ -103,16 +105,16 @@ export function ArmControls() {
           />
         </div>
 
-        {/* Home button */}
+        {/* Park button - moves arm up and out of camera view */}
         <Button
           variant="secondary"
           size="sm"
           className="w-full"
           disabled={!connected}
-          onClick={handleHome}
+          onClick={handlePark}
         >
-          <Home className="h-4 w-4 mr-2" />
-          Home Position
+          <ParkingCircle className="h-4 w-4 mr-2" />
+          Park (Clear View)
         </Button>
       </CardContent>
     </Card>
