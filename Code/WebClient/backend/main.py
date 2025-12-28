@@ -10,8 +10,11 @@ import time
 from typing import Optional
 from contextlib import asynccontextmanager
 
+from pathlib import Path
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from robot_client import robot
@@ -504,6 +507,26 @@ async def ai_websocket(websocket: WebSocket):
         pass
     except Exception as e:
         print(f"AI WebSocket error: {e}")
+
+
+# === Static Files (Frontend) ===
+
+# Serve frontend dist folder
+FRONTEND_DIR = Path(__file__).parent.parent / "frontend" / "dist"
+
+if FRONTEND_DIR.exists():
+    # Serve static assets
+    app.mount("/assets", StaticFiles(directory=FRONTEND_DIR / "assets"), name="assets")
+
+    # Catch-all route for SPA - must be last
+    @app.get("/{full_path:path}")
+    async def serve_spa(full_path: str):
+        """Serve the SPA for any non-API route."""
+        # If it's an API or WebSocket route, let it fall through (404)
+        if full_path.startswith("api/") or full_path.startswith("ws/"):
+            raise HTTPException(status_code=404, detail="Not found")
+        # Serve index.html for SPA routing
+        return FileResponse(FRONTEND_DIR / "index.html")
 
 
 # === Run Server ===
