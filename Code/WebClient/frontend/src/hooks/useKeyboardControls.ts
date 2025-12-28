@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react'
 import { api } from '@/lib/api'
 import { useRobotStore } from '@/stores/robotStore'
 
-const MOTOR_SPEED = 4000
+const MOTOR_SPEED = 3000 // Match physical gamepad MOTOR_BASE
 
 export function useKeyboardControls() {
   const { connected, servo1Angle, servo2Angle, setServo1Angle, setServo2Angle } = useRobotStore()

@@ -1,4 +1,4 @@
-import { useRef, useCallback, useState } from 'react'
+import { useRef, useCallback, useState, useEffect } from 'react'
 
 interface JoystickProps {
   size?: number
@@ -9,7 +9,7 @@ interface JoystickProps {
 }
 
 export function Joystick({
-  size = 120,
+  size = 180, // Larger default for easier mobile control
   onMove,
   onRelease,
   disabled = false,
@@ -18,13 +18,14 @@ export function Joystick({
   const containerRef = useRef<HTMLDivElement>(null)
   const [position, setPosition] = useState({ x: 0, y: 0 })
   const [isDragging, setIsDragging] = useState(false)
+  const pointerIdRef = useRef<number | null>(null)
 
-  const knobSize = size * 0.4
+  const knobSize = size * 0.35
   const maxDistance = (size - knobSize) / 2
 
-  const handleMove = useCallback(
+  const calculatePosition = useCallback(
     (clientX: number, clientY: number) => {
-      if (!containerRef.current || disabled) return
+      if (!containerRef.current) return { x: 0, y: 0, normalX: 0, normalY: 0 }
 
       const rect = containerRef.current.getBoundingClientRect()
       const centerX = rect.left + rect.width / 2
@@ -40,48 +41,78 @@ export function Joystick({
         dy = (dy / distance) * maxDistance
       }
 
-      setPosition({ x: dx, y: dy })
-
       // Normalize to -1 to 1
       const normalX = dx / maxDistance
       const normalY = -dy / maxDistance // Invert Y so up is positive
 
-      onMove(normalX, normalY)
+      return { x: dx, y: dy, normalX, normalY }
     },
-    [maxDistance, onMove, disabled]
+    [maxDistance]
   )
-
-  const handleRelease = useCallback(() => {
-    setIsDragging(false)
-    setPosition({ x: 0, y: 0 })
-    onRelease?.()
-  }, [onRelease])
 
   const handlePointerDown = useCallback(
     (e: React.PointerEvent) => {
-      if (disabled) return
+      if (disabled || !containerRef.current) return
+
       e.preventDefault()
+      e.stopPropagation()
+
+      // Capture pointer on the container, not the target
+      containerRef.current.setPointerCapture(e.pointerId)
+      pointerIdRef.current = e.pointerId
       setIsDragging(true)
-      ;(e.target as HTMLElement).setPointerCapture(e.pointerId)
-      handleMove(e.clientX, e.clientY)
+
+      const pos = calculatePosition(e.clientX, e.clientY)
+      setPosition({ x: pos.x, y: pos.y })
+      onMove(pos.normalX, pos.normalY)
     },
-    [handleMove, disabled]
+    [calculatePosition, onMove, disabled]
   )
 
   const handlePointerMove = useCallback(
     (e: React.PointerEvent) => {
-      if (!isDragging) return
-      handleMove(e.clientX, e.clientY)
+      // Only respond to the captured pointer
+      if (!isDragging || e.pointerId !== pointerIdRef.current) return
+
+      e.preventDefault()
+      const pos = calculatePosition(e.clientX, e.clientY)
+      setPosition({ x: pos.x, y: pos.y })
+      onMove(pos.normalX, pos.normalY)
     },
-    [isDragging, handleMove]
+    [isDragging, calculatePosition, onMove]
   )
 
-  const handlePointerUp = useCallback(() => {
-    handleRelease()
-  }, [handleRelease])
+  const handlePointerUp = useCallback(
+    (e: React.PointerEvent) => {
+      // Only respond to the captured pointer
+      if (e.pointerId !== pointerIdRef.current) return
+
+      if (containerRef.current) {
+        containerRef.current.releasePointerCapture(e.pointerId)
+      }
+      pointerIdRef.current = null
+      setIsDragging(false)
+      setPosition({ x: 0, y: 0 })
+      onRelease?.()
+    },
+    [onRelease]
+  )
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (pointerIdRef.current !== null && containerRef.current) {
+        try {
+          containerRef.current.releasePointerCapture(pointerIdRef.current)
+        } catch {
+          // Ignore if already released
+        }
+      }
+    }
+  }, [])
 
   return (
-    <div className="flex flex-col items-center gap-1">
+    <div className="flex flex-col items-center gap-2">
       <div
         ref={containerRef}
         className={`relative rounded-full border-2 touch-none select-none ${
@@ -93,8 +124,8 @@ export function Joystick({
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
-        onPointerLeave={handlePointerUp}
         onPointerCancel={handlePointerUp}
+        // Don't use pointerLeave - we have pointer capture
       >
         {/* Cross guides */}
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
@@ -102,9 +133,17 @@ export function Joystick({
           <div className="absolute w-[1px] h-full bg-border/50" />
         </div>
 
-        {/* Knob */}
+        {/* Direction indicators */}
+        <div className="absolute inset-0 pointer-events-none">
+          <span className="absolute top-2 left-1/2 -translate-x-1/2 text-xs text-muted-foreground/50">▲</span>
+          <span className="absolute bottom-2 left-1/2 -translate-x-1/2 text-xs text-muted-foreground/50">▼</span>
+          <span className="absolute left-2 top-1/2 -translate-y-1/2 text-xs text-muted-foreground/50">◀</span>
+          <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-muted-foreground/50">▶</span>
+        </div>
+
+        {/* Knob - pointer-events-none so it doesn't interfere */}
         <div
-          className={`absolute rounded-full shadow-md transition-transform duration-75 ${
+          className={`absolute rounded-full shadow-lg pointer-events-none transition-transform duration-75 ${
             disabled ? 'bg-muted-foreground/30' : 'bg-primary'
           } ${isDragging ? 'scale-110' : ''}`}
           style={{
@@ -116,7 +155,7 @@ export function Joystick({
         />
       </div>
       {label && (
-        <span className="text-xs text-muted-foreground">{label}</span>
+        <span className="text-sm text-muted-foreground">{label}</span>
       )}
     </div>
   )

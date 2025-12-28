@@ -4,8 +4,9 @@ import { useRobotStore } from '@/stores/robotStore'
 import { api } from '@/lib/api'
 import { Joystick } from './Joystick'
 
-const MAX_SPEED = 4000
-const SEND_INTERVAL = 50 // Send commands every 50ms
+// Match physical gamepad: MOTOR_BASE=3000 at 100% speed
+const MAX_SPEED = 3000
+const SEND_INTERVAL = 50 // Send commands every 50ms (20Hz like physical gamepad)
 
 export function MovementControls() {
   const { connected } = useRobotStore()
@@ -23,8 +24,10 @@ export function MovementControls() {
 
       const { left, right } = targetRef.current
 
-      // Only send if values changed
-      if (left === lastSentRef.current.left && right === lastSentRef.current.right) {
+      // Only send if values changed (with small threshold to reduce chatter)
+      const leftDiff = Math.abs(left - lastSentRef.current.left)
+      const rightDiff = Math.abs(right - lastSentRef.current.right)
+      if (leftDiff < 50 && rightDiff < 50) {
         return
       }
 
@@ -48,22 +51,18 @@ export function MovementControls() {
   const handleMove = useCallback((x: number, y: number) => {
     isDraggingRef.current = true
 
-    // Tank drive: y = forward/back, x = turn
-    // Simple arcade-to-tank conversion
+    // Tank drive mixing (same as physical gamepad)
+    // forward = y (up is positive), turn = x (right is positive)
     const forward = y * MAX_SPEED
     const turn = x * MAX_SPEED
 
-    // Mix forward and turn
+    // Differential drive: left = forward + turn, right = forward - turn
     let left = forward + turn
     let right = forward - turn
 
-    // Normalize if over max
-    const maxVal = Math.max(Math.abs(left), Math.abs(right))
-    if (maxVal > MAX_SPEED) {
-      const scale = MAX_SPEED / maxVal
-      left *= scale
-      right *= scale
-    }
+    // Clamp to valid motor range
+    left = Math.max(-4095, Math.min(4095, left))
+    right = Math.max(-4095, Math.min(4095, right))
 
     targetRef.current = {
       left: Math.round(left),
@@ -74,9 +73,9 @@ export function MovementControls() {
   const handleRelease = useCallback(async () => {
     isDraggingRef.current = false
     targetRef.current = { left: 0, right: 0 }
-    lastSentRef.current = { left: -1, right: -1 } // Force next send
+    lastSentRef.current = { left: -100, right: -100 } // Force next send
 
-    // Immediately stop
+    // Immediately stop motors
     try {
       await api.motor(0, 0)
     } catch (e) {
@@ -91,11 +90,11 @@ export function MovementControls() {
       </CardHeader>
       <CardContent className="flex flex-col items-center">
         <Joystick
-          size={150}
+          size={200}
           onMove={handleMove}
           onRelease={handleRelease}
           disabled={!connected}
-          label="WASD or drag"
+          label="Drag to move"
         />
       </CardContent>
     </Card>
