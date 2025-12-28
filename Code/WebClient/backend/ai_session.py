@@ -72,13 +72,34 @@ ROBOT_BRAIN_INSTRUCTION = """You are the brain of a tank robot. PERCEIVE before 
 2. ALWAYS use tools - never just describe what you would do
 3. For multi-step tasks, call tools in sequence with sense() between steps
 4. Verify results with sense() after important actions
+5. KEEP ARM UP by default - it blocks camera view when down
 
 ## PERCEPTION TOOLS
-- sense() → Returns: distance, gripper state, AND camera view description
+- sense() → Returns: ultrasonic distance, lidar distance, line sensors, arm state, AND camera view
 - sense("Is there a red ball?") → Same + answer to specific question
+- lidar_sweep() → Returns LiDAR readings at 3 heights (up/mid/down). Useful for profiling obstacles.
+
+## SENSORS EXPLAINED
+- Ultrasonic: Short-range (0-200cm), front-facing, good for close obstacles
+- LiDAR: Long-range (0-1200cm), precise, MOUNTED ON ARM above clamp
+  - Reading height changes with arm position
+  - When arm up: LiDAR points forward at high position (default)
+  - When arm down: LiDAR points forward at low position
+- Line sensors: 3 IR sensors (L/C/R) for line following. Value 0-7 (binary: LCR)
+  - 0=all off line, 2=center on line, 7=all on line
+- Camera: Front-facing, blocked when arm is down
+
+## ARM BEHAVIOR (IMPORTANT)
+The robot arm moves up/down and has a clamp (gripper) at the end, with LiDAR above the clamp.
+- arm_up() - Raise arm (default position). Camera unblocked. LiDAR at high position. Returns arm state.
+- arm_down() - Lower arm. Blocks camera view! LiDAR at low position. Returns arm state.
+- **Keep arm UP unless**:
+  - Picking up objects (lower arm, close clamp, raise arm)
+  - Interacting with environment at ground level
+  - Doing a lidar_sweep() to scan at multiple heights
 
 ## MOVEMENT TOOLS
-- move_toward(cm) - Forward using ultrasonic feedback. Precise. Stops at distance.
+- move_toward(cm) - Forward using ultrasonic/lidar feedback. Precise. Stops at obstacles.
 - move_timed(direction, ms) - Any direction for duration. ~50cm/sec. Directions: forward/backward/left/right
 - turn_degrees(degrees) - Rotate body. Positive=left, negative=right. ~90°/sec
 - stop() - Emergency stop
@@ -86,7 +107,15 @@ ROBOT_BRAIN_INSTRUCTION = """You are the brain of a tank robot. PERCEIVE before 
 ## OTHER TOOLS
 - set_servo(channel, angle) - Camera gimbal: 0=pan, 1=tilt, 90-150°
 - set_leds(r, g, b) - LED color (0-255)
-- clamp_up() / clamp_down() - Gripper close/open
+- clamp_close() / clamp_open() - Aliases for arm_up/arm_down (arm and clamp are mechanically coupled)
+
+## LINE FOLLOWING
+When asked to follow a line:
+1. sense() to check line sensors
+2. If center sensor active (value has bit 1 set): move forward
+3. If only left sensor: turn_degrees(15) to correct
+4. If only right sensor: turn_degrees(-15) to correct
+5. Repeat sense() and adjust
 
 ## EXPLORATION
 If asked to find something not currently visible:
@@ -95,12 +124,20 @@ If asked to find something not currently visible:
 3. If spotted: navigate toward it with move_toward() or move_timed()
 4. Verify with sense() when close
 
+## PICKING UP OBJECTS
+1. sense() to locate object
+2. Navigate close with move_toward()
+3. arm_down() to lower arm and open clamp
+4. Move forward slightly to position clamp around object
+5. arm_up() to close clamp and lift (restores camera view)
+
 ## SAFETY
-- move_toward() auto-blocks if obstacle < 15cm
+- move_toward() auto-blocks if obstacle < 15cm (ultrasonic) or < 30cm (lidar)
 - Emergency stop on "stop/halt/freeze/emergency"
+- Always arm_up() after picking up or scanning to restore camera view
 
 ## RESPONSE STYLE
-- Include key perception info: "See ball 40cm left. Turning."
+- Include key perception info: "See ball 40cm left, lidar clear. Turning."
 - After actions: "Turned left. Ball now ahead, 35cm."
 - Be CONCISE but INFORMATIVE
 
@@ -108,8 +145,9 @@ If asked to find something not currently visible:
 User: "go forward 30cm" → sense(), move_toward(30) → "Clear ahead. Moved 28cm, wall at 20cm."
 User: "look left" → turn_degrees(90), sense() → "Turned left. Chair 60cm ahead, clear path."
 User: "find the red ball" → sense("red ball?") → not found → turn_degrees(90), sense() → "Found! Ball 1m ahead." → move_toward(90) → "At the ball."
-User: "what do you see?" → sense() → "Distance 45cm. I see a wooden table with books, chair to the right."
-User: "pick up the cup" → sense("where is cup?"), move_toward(), clamp_down(), clamp_up(), sense("got it?") → "Cup secured."
+User: "what do you see?" → sense() → "Ultrasonic 45cm, LiDAR 120cm. I see a wooden table with books."
+User: "scan the area" → lidar_sweep() → "Up: 120cm, Mid: 85cm, Down: 40cm. Low obstacle ahead."
+User: "pick up the ball" → sense(), move_toward(20), arm_down(), move_timed("forward", 300), arm_up() → "Got it! Ball secured."
 """
 
 
@@ -193,6 +231,50 @@ class AISession:
         self.session_id = session.id
         self._initialized = True
 
+    def _build_environment_context(self) -> str:
+        """Build environment context string with all sensor data."""
+        status = "Connected" if self.robot.connected else "DISCONNECTED"
+        parts = [f"Robot: {status}"]
+
+        # Ultrasonic (primary obstacle sensor)
+        ultrasonic = self.robot.sensors.ultrasonic
+        if ultrasonic is not None:
+            parts.append(f"Ultrasonic: {ultrasonic:.1f}cm")
+
+        # LiDAR (long range)
+        lidar = self.robot.sensors.lidar
+        if lidar is not None and lidar > 0:
+            parts.append(f"LiDAR: {lidar}cm")
+
+        # Line sensors (infrared)
+        infrared = self.robot.sensors.infrared
+        if infrared is not None:
+            left = (infrared & 0b100) != 0
+            center = (infrared & 0b010) != 0
+            right = (infrared & 0b001) != 0
+            line_parts = []
+            if left: line_parts.append("L")
+            if center: line_parts.append("C")
+            if right: line_parts.append("R")
+            if line_parts:
+                parts.append(f"Line: {'+'.join(line_parts)}")
+            else:
+                parts.append("Line: none")
+
+        # Arm state (gripper_status reflects arm position)
+        arm_state = self.robot.sensors.gripper_status
+        if arm_state:
+            if arm_state == "up_complete":
+                parts.append("Arm: UP (camera clear)")
+            elif arm_state == "down_complete":
+                parts.append("Arm: DOWN (camera blocked!)")
+            elif arm_state == "stopped":
+                parts.append("Arm: stopped (mid-position)")
+            else:
+                parts.append(f"Arm: {arm_state}")
+
+        return ", ".join(parts)
+
     def _create_tools(self):
         """Create robot control tools for the ADK agent."""
         robot = self.robot
@@ -210,17 +292,49 @@ class AISession:
             Returns:
                 Combined sensor readings and vision analysis.
             """
-            # Get sensor readings
-            distance = robot.sensors.ultrasonic
-            gripper = robot.sensors.gripper_status
+            # Get all sensor readings
+            ultrasonic = robot.sensors.ultrasonic
+            lidar = robot.sensors.lidar
+            infrared = robot.sensors.infrared
+            arm_state = robot.sensors.gripper_status
 
             parts = []
-            if distance is not None:
-                parts.append(f"Distance: {distance:.1f}cm")
+
+            # Ultrasonic (short range)
+            if ultrasonic is not None:
+                parts.append(f"Ultrasonic: {ultrasonic:.1f}cm")
             else:
-                parts.append("Distance: No reading")
-            if gripper:
-                parts.append(f"Gripper: {gripper}")
+                parts.append("Ultrasonic: No reading")
+
+            # LiDAR (long range, mounted on arm)
+            if lidar is not None and lidar > 0:
+                parts.append(f"LiDAR: {lidar}cm")
+            else:
+                parts.append("LiDAR: No reading")
+
+            # Line sensors (infrared)
+            if infrared is not None:
+                # Decode 3-bit value: bit2=left, bit1=center, bit0=right
+                left = (infrared & 0b100) != 0
+                center = (infrared & 0b010) != 0
+                right = (infrared & 0b001) != 0
+                line_status = []
+                if left: line_status.append("L")
+                if center: line_status.append("C")
+                if right: line_status.append("R")
+                if line_status:
+                    parts.append(f"Line: {'+'.join(line_status)} active")
+                else:
+                    parts.append("Line: None detected")
+
+            # Arm state (affects camera view and LiDAR height)
+            if arm_state:
+                if arm_state == "up_complete":
+                    parts.append("Arm: UP (camera clear)")
+                elif arm_state == "down_complete":
+                    parts.append("Arm: DOWN (camera blocked!)")
+                else:
+                    parts.append(f"Arm: {arm_state}")
 
             # Get vision analysis
             vision_result = ""
@@ -255,7 +369,7 @@ class AISession:
         # === MOVEMENT WITH FEEDBACK ===
 
         def move_toward(distance_cm: int) -> str:
-            """Move forward approximately distance_cm using ultrasonic feedback.
+            """Move forward approximately distance_cm using ultrasonic/lidar feedback.
 
             Args:
                 distance_cm: Target distance to travel in centimeters.
@@ -267,6 +381,13 @@ class AISession:
                 return "ERROR: Robot not connected"
 
             start_distance = robot.sensors.ultrasonic
+            lidar_distance = robot.sensors.lidar
+
+            # Check LiDAR first (longer range, more precise)
+            if lidar_distance is not None and lidar_distance > 0:
+                if lidar_distance < 30:  # LiDAR safety threshold
+                    return f"BLOCKED: LiDAR detects obstacle at {lidar_distance}cm"
+
             if start_distance is None:
                 return "ERROR: No initial distance reading - cannot use ultrasonic feedback"
 
@@ -444,33 +565,93 @@ class AISession:
             robot.led(1, r, g, b, 15)
             return f"LEDs set to RGB({r},{g},{b})"
 
-        def clamp_up() -> str:
-            """Close the gripper (pinch/grab)."""
+        # === ARM & CLAMP ===
+        # The arm moves up/down. LiDAR is mounted at top of arm, clamp at bottom.
+        # Arm up = camera unblocked, LiDAR high. Arm down = camera blocked, LiDAR low.
+
+        def arm_up() -> str:
+            """Raise arm to default position. Unblocks camera. LiDAR at high position. Also closes clamp."""
             if not robot.connected:
                 return "ERROR: Robot not connected"
             robot.gripper(1)
-            return "Gripper closing"
+            time.sleep(0.5)  # Wait for arm movement to start
+            return "Arm raising (camera unblocked, LiDAR high)"
 
-        def clamp_down() -> str:
-            """Open the gripper (release)."""
+        def arm_down() -> str:
+            """Lower arm. WARNING: Blocks camera view! LiDAR at low position. Also opens clamp."""
             if not robot.connected:
                 return "ERROR: Robot not connected"
             robot.gripper(2)
-            return "Gripper opening"
+            time.sleep(0.5)  # Wait for arm movement to start
+            return "Arm lowering (camera blocked, LiDAR low)"
+
+        def clamp_close() -> str:
+            """Close the clamp/gripper to grab objects. Same as arm_up."""
+            return arm_up()
+
+        def clamp_open() -> str:
+            """Open the clamp/gripper to release objects. Same as arm_down."""
+            return arm_down()
+
+        def lidar_sweep() -> str:
+            """Sweep arm through 3 heights taking LiDAR readings at each.
+
+            Returns distance readings at: UP (high), MID (middle), DOWN (low).
+            Leaves arm in UP position when done.
+            """
+            if not robot.connected:
+                return "ERROR: Robot not connected"
+
+            readings = {}
+
+            # Position 1: UP (high)
+            robot.gripper(1)  # Arm up
+            time.sleep(1.5)  # Wait for arm to reach position
+            robot.request_lidar()
+            time.sleep(0.2)
+            readings["up"] = robot.sensors.lidar
+
+            # Position 2: MID (halfway - brief stop during descent)
+            robot.gripper(2)  # Start lowering
+            time.sleep(0.7)  # Partial descent
+            robot.gripper(0)  # Stop at mid position
+            time.sleep(0.3)
+            robot.request_lidar()
+            time.sleep(0.2)
+            readings["mid"] = robot.sensors.lidar
+
+            # Position 3: DOWN (low)
+            robot.gripper(2)  # Continue down
+            time.sleep(1.0)  # Full descent
+            robot.request_lidar()
+            time.sleep(0.2)
+            readings["down"] = robot.sensors.lidar
+
+            # Return to UP position (unblock camera)
+            robot.gripper(1)
+            time.sleep(1.5)
+
+            # Format results
+            up_str = f"{readings['up']}cm" if readings['up'] else "N/A"
+            mid_str = f"{readings['mid']}cm" if readings['mid'] else "N/A"
+            down_str = f"{readings['down']}cm" if readings['down'] else "N/A"
+
+            return f"LiDAR sweep: Up={up_str}, Mid={mid_str}, Down={down_str}. Arm returned to UP."
 
         return [
             sense, move_toward, move_timed, turn_degrees, stop,
-            set_servo, set_leds, clamp_up, clamp_down
+            set_servo, set_leds, arm_up, arm_down, clamp_close, clamp_open, lidar_sweep
         ]
 
-    async def process_audio(self, audio_base64: str) -> dict:
+    async def process_audio(self, audio_base64: str, mime_type: str = "audio/webm") -> dict:
         """Process audio and return result with optional TTS audio.
 
         Args:
-            audio_base64: Base64-encoded webm audio from browser
+            audio_base64: Base64-encoded audio from browser
+            mime_type: Audio MIME type (default: audio/webm)
 
         Returns:
-            dict with keys: user_text, assistant_text, audio (base64 mp3)
+            dict with keys: user_text, assistant_text, audio (base64 wav)
         """
         await self._ensure_initialized()
 
@@ -489,16 +670,18 @@ class AISession:
                 model=STT_MODEL,
                 contents=[
                     "Transcribe this audio exactly. Return only the transcription.",
-                    types.Part.from_bytes(data=audio_bytes, mime_type="audio/webm")
+                    types.Part.from_bytes(data=audio_bytes, mime_type=mime_type)
                 ]
             )
             user_text = stt_response.text.strip()
             if not user_text:
+                result["assistant_text"] = "I didn't catch that. Please try again."
                 return result
 
             result["user_text"] = user_text
         except Exception as e:
             print(f"STT error: {e}")
+            result["assistant_text"] = f"Speech recognition failed: {e}"
             return result
 
         # Emergency stop fast-path
@@ -510,16 +693,8 @@ class AISession:
 
         # Step 2: Process with ADK agent
         try:
-            # Build environment context
-            distance = self.robot.sensors.ultrasonic
-            clamp = self.robot.sensors.gripper_status
-            status = "Connected" if self.robot.connected else "DISCONNECTED"
-            dist_str = f"{distance:.1f}cm" if distance else "No reading"
-
-            env = f"Robot: {status}, Distance: {dist_str}"
-            if clamp:
-                env += f", Clamp: {clamp}"
-
+            # Build environment context with all sensors
+            env = self._build_environment_context()
             prompt = f"[ENV] {env}\n[COMMAND] {user_text}"
 
             # Run agent
@@ -597,15 +772,7 @@ class AISession:
 
         # Process with ADK agent
         try:
-            distance = self.robot.sensors.ultrasonic
-            clamp = self.robot.sensors.gripper_status
-            status = "Connected" if self.robot.connected else "DISCONNECTED"
-            dist_str = f"{distance:.1f}cm" if distance else "No reading"
-
-            env = f"Robot: {status}, Distance: {dist_str}"
-            if clamp:
-                env += f", Clamp: {clamp}"
-
+            env = self._build_environment_context()
             prompt = f"[ENV] {env}\n[COMMAND] {text}"
 
             emit(AgentEvent("env", env))

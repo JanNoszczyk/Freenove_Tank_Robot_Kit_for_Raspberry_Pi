@@ -17,6 +17,8 @@ from dataclasses import dataclass
 class SensorData:
     ultrasonic: Optional[float] = None
     gripper_status: Optional[str] = None  # "stopped", "up_complete", "down_complete"
+    infrared: Optional[int] = None  # 0-7, 3-bit combined value from 3 IR sensors
+    lidar: Optional[int] = None  # Distance in cm from TF-Mini S LiDAR
 
 
 class RobotClient:
@@ -157,6 +159,24 @@ class RobotClient:
             for cb in self._sensor_callbacks:
                 cb("gripper", status)
 
+        elif cmd == "CMD_INFRARED" and len(parts) > 1:
+            try:
+                infrared_value = int(parts[1])
+                self._sensors.infrared = infrared_value
+                for cb in self._sensor_callbacks:
+                    cb("infrared", infrared_value)
+            except ValueError:
+                pass
+
+        elif cmd == "CMD_LIDAR" and len(parts) > 1:
+            try:
+                lidar_dist = int(parts[1])
+                self._sensors.lidar = lidar_dist
+                for cb in self._sensor_callbacks:
+                    cb("lidar", lidar_dist)
+            except ValueError:
+                pass
+
     # === Video Streaming ===
 
     def start_video(self) -> bool:
@@ -294,6 +314,14 @@ class RobotClient:
     def request_ultrasonic(self):
         """Request ultrasonic distance reading."""
         self.send_command("CMD_SONIC#")
+
+    def request_infrared(self):
+        """Request infrared (line following) sensor reading."""
+        self.send_command("CMD_INFRARED#")
+
+    def request_lidar(self):
+        """Request LiDAR distance reading."""
+        self.send_command("CMD_LIDAR#")
 
 
 # Global singleton instance

@@ -32,12 +32,16 @@ interface RobotState {
   // Sensors
   ultrasonicDistance: number | null
   gripperStatus: string | null
+  infraredValue: number | null  // 0-7, 3-bit combined value from 3 IR sensors
+  lidarDistance: number | null  // Distance in cm from TF-Mini S LiDAR
   setUltrasonicDistance: (distance: number | null) => void
   setGripperStatus: (status: string | null) => void
+  setInfraredValue: (value: number | null) => void
+  setLidarDistance: (distance: number | null) => void
 
   // AI Mode
   aiState: 'idle' | 'listening' | 'thinking' | 'speaking'
-  aiTranscript: Array<{ role: 'user' | 'assistant'; text: string }>
+  aiTranscript: Array<{ id: string; role: 'user' | 'assistant'; text: string }>
   setAiState: (state: 'idle' | 'listening' | 'thinking' | 'speaking') => void
   addAiMessage: (role: 'user' | 'assistant', text: string) => void
   clearAiTranscript: () => void
@@ -75,8 +79,12 @@ export const useRobotStore = create<RobotState>((set) => ({
   // Sensors
   ultrasonicDistance: null,
   gripperStatus: null,
+  infraredValue: null,
+  lidarDistance: null,
   setUltrasonicDistance: (ultrasonicDistance) => set({ ultrasonicDistance }),
   setGripperStatus: (gripperStatus) => set({ gripperStatus }),
+  setInfraredValue: (infraredValue) => set({ infraredValue }),
+  setLidarDistance: (lidarDistance) => set({ lidarDistance }),
 
   // AI Mode
   aiState: 'idle',
@@ -84,7 +92,12 @@ export const useRobotStore = create<RobotState>((set) => ({
   setAiState: (aiState) => set({ aiState }),
   addAiMessage: (role, text) =>
     set((state) => {
-      const newTranscript = [...state.aiTranscript, { role, text }]
+      const newMessage = {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        role,
+        text
+      }
+      const newTranscript = [...state.aiTranscript, newMessage]
       // Limit to last 50 messages to prevent memory issues
       return { aiTranscript: newTranscript.slice(-50) }
     }),

@@ -39,25 +39,30 @@ function App() {
             <VideoStream />
           </div>
 
-          {/* Right Column: Mode-dependent content */}
+          {/* Right Column: Connection + Mode + Controls */}
           <div className="space-y-4">
             <ConnectionPanel />
             <ModeSelector />
 
-            {isAIMode ? (
-              /* AI Mode: Show chat */
-              <AIChat />
-            ) : (
+            {!isAIMode && (
               /* Manual Mode: Show all controls */
               <>
                 <MovementControls />
                 <ArmControls />
                 <LEDPanel />
-                <SensorDisplay />
               </>
             )}
+            {/* Always show sensors when connected */}
+            <SensorDisplay />
           </div>
         </div>
+
+        {/* AI Chat - Full Width Below Grid (AI Mode Only) */}
+        {isAIMode && (
+          <div className="mt-4">
+            <AIChat />
+          </div>
+        )}
       </div>
     </div>
   )

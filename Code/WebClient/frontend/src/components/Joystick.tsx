@@ -98,6 +98,19 @@ export function Joystick({
     [onRelease]
   )
 
+  // Handle unexpected pointer capture loss (browser can release it)
+  const handleLostPointerCapture = useCallback(
+    (e: React.PointerEvent) => {
+      if (e.pointerId === pointerIdRef.current) {
+        pointerIdRef.current = null
+        setIsDragging(false)
+        setPosition({ x: 0, y: 0 })
+        onRelease?.()
+      }
+    },
+    [onRelease]
+  )
+
   // Cleanup on unmount
   useEffect(() => {
     return () => {
@@ -125,7 +138,7 @@ export function Joystick({
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
         onPointerCancel={handlePointerUp}
-        // Don't use pointerLeave - we have pointer capture
+        onLostPointerCapture={handleLostPointerCapture}
       >
         {/* Cross guides */}
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">

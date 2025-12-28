@@ -15,9 +15,25 @@ export function MovementControls() {
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const isDraggingRef = useRef(false)
 
+  // Stop motors safely
+  const stopMotors = useCallback(async () => {
+    isDraggingRef.current = false
+    targetRef.current = { left: 0, right: 0 }
+    lastSentRef.current = { left: 0, right: 0 }
+    try {
+      await api.motor(0, 0)
+    } catch (e) {
+      console.error('Stop motors error:', e)
+    }
+  }, [])
+
   // Continuously send motor commands while dragging
   useEffect(() => {
-    if (!connected) return
+    if (!connected) {
+      // Stop motors when disconnected
+      stopMotors()
+      return
+    }
 
     intervalRef.current = setInterval(async () => {
       if (!isDraggingRef.current) return
@@ -45,8 +61,33 @@ export function MovementControls() {
         clearInterval(intervalRef.current)
         intervalRef.current = null
       }
+      // Stop motors on unmount/cleanup
+      stopMotors()
     }
-  }, [connected])
+  }, [connected, stopMotors])
+
+  // Stop on tab visibility change or window blur
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.hidden && isDraggingRef.current) {
+        stopMotors()
+      }
+    }
+
+    const handleBlur = () => {
+      if (isDraggingRef.current) {
+        stopMotors()
+      }
+    }
+
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    window.addEventListener('blur', handleBlur)
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+      window.removeEventListener('blur', handleBlur)
+    }
+  }, [stopMotors])
 
   const handleMove = useCallback((x: number, y: number) => {
     isDraggingRef.current = true
@@ -70,18 +111,9 @@ export function MovementControls() {
     }
   }, [])
 
-  const handleRelease = useCallback(async () => {
-    isDraggingRef.current = false
-    targetRef.current = { left: 0, right: 0 }
-    lastSentRef.current = { left: -100, right: -100 } // Force next send
-
-    // Immediately stop motors
-    try {
-      await api.motor(0, 0)
-    } catch (e) {
-      console.error('Motor error:', e)
-    }
-  }, [])
+  const handleRelease = useCallback(() => {
+    stopMotors()
+  }, [stopMotors])
 
   return (
     <Card>

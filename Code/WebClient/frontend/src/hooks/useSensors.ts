@@ -8,7 +8,13 @@ export function useSensors() {
   const wsRef = useRef<WebSocket | null>(null)
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const reconnectDelayRef = useRef(INITIAL_RECONNECT_DELAY)
-  const { connected, setUltrasonicDistance, setGripperStatus } = useRobotStore()
+  const {
+    connected,
+    setUltrasonicDistance,
+    setGripperStatus,
+    setInfraredValue,
+    setLidarDistance,
+  } = useRobotStore()
 
   // Use ref for reconnection to avoid circular dependency
   const connectRef = useRef<() => void>(() => {})
@@ -31,12 +37,22 @@ export function useSensors() {
           setUltrasonicDistance(data.value)
         } else if (data.type === 'gripper') {
           setGripperStatus(data.value)
+        } else if (data.type === 'infrared') {
+          setInfraredValue(data.value)
+        } else if (data.type === 'lidar') {
+          setLidarDistance(data.value)
         } else if (data.type === 'initial') {
           if (data.ultrasonic !== null) {
             setUltrasonicDistance(data.ultrasonic)
           }
           if (data.gripper !== null) {
             setGripperStatus(data.gripper)
+          }
+          if (data.infrared !== null) {
+            setInfraredValue(data.infrared)
+          }
+          if (data.lidar !== null) {
+            setLidarDistance(data.lidar)
           }
         }
         // Ignore ping messages
@@ -62,7 +78,7 @@ export function useSensors() {
         }, reconnectDelayRef.current)
       }
     }
-  }, [setUltrasonicDistance, setGripperStatus])
+  }, [setUltrasonicDistance, setGripperStatus, setInfraredValue, setLidarDistance])
 
   // Keep ref in sync (must be in useEffect to avoid "cannot update ref during render")
   useEffect(() => {
@@ -105,5 +121,11 @@ export function useSensors() {
     }
   }
 
-  return { requestUltrasonic }
+  const requestAllSensors = () => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: 'request_all_sensors' }))
+    }
+  }
+
+  return { requestUltrasonic, requestAllSensors }
 }

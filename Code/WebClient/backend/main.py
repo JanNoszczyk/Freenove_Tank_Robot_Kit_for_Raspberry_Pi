@@ -6,6 +6,7 @@ REST endpoints for robot control + WebSocket for video/sensors/AI
 
 import asyncio
 import json
+import time
 from typing import Optional
 from contextlib import asynccontextmanager
 
@@ -14,6 +15,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from robot_client import robot
+
+# === Input Validation Constants ===
+MAX_TEXT_LENGTH = 2000  # Characters
+MAX_AUDIO_SIZE = 10 * 1024 * 1024  # 10MB base64
+MIN_MESSAGE_INTERVAL = 0.3  # Seconds between messages
+ALLOWED_AUDIO_TYPES = {"audio/webm", "audio/webm;codecs=opus", "audio/ogg", "audio/mp4"}
 
 
 # === Pydantic Models ===
@@ -77,7 +84,7 @@ class ConnectionManager:
         for connection in self.sensor_connections[:]:
             try:
                 await connection.send_text(message)
-            except:
+            except Exception:
                 self.sensor_connections.remove(connection)
 
 
@@ -307,19 +314,31 @@ async def sensors_websocket(websocket: WebSocket):
             "type": "initial",
             "ultrasonic": robot.sensors.ultrasonic,
             "gripper": robot.sensors.gripper_status,
+            "infrared": robot.sensors.infrared,
+            "lidar": robot.sensors.lidar,
             "connected": robot.connected
         })
 
         # Keep connection alive, receive any client messages
         while True:
             try:
-                # Wait for messages (like ultrasonic request)
+                # Wait for messages (like sensor requests)
                 # Use longer timeout (60s) to reduce unnecessary pings
                 data = await asyncio.wait_for(websocket.receive_text(), timeout=60.0)
                 msg = json.loads(data)
 
-                if msg.get("type") == "request_ultrasonic":
+                msg_type = msg.get("type")
+                if msg_type == "request_ultrasonic":
                     robot.request_ultrasonic()
+                elif msg_type == "request_infrared":
+                    robot.request_infrared()
+                elif msg_type == "request_lidar":
+                    robot.request_lidar()
+                elif msg_type == "request_all_sensors":
+                    # Request all sensors at once for efficiency
+                    robot.request_ultrasonic()
+                    robot.request_infrared()
+                    robot.request_lidar()
 
             except asyncio.TimeoutError:
                 # Send ping to keep connection alive
@@ -339,10 +358,47 @@ async def sensors_websocket(websocket: WebSocket):
 
 # === AI Mode WebSocket ===
 
+async def send_ai_response(
+    websocket: WebSocket,
+    result: dict,
+    user_text: str = None
+):
+    """Send standardized AI response to WebSocket client."""
+    # Send user transcript (for text input, we pass it; for audio, it's in result)
+    text_to_send = user_text or result.get("user_text")
+    if text_to_send:
+        await websocket.send_json({
+            "type": "transcript",
+            "role": "user",
+            "text": text_to_send
+        })
+
+    # Send assistant response
+    if result.get("assistant_text"):
+        await websocket.send_json({
+            "type": "transcript",
+            "role": "assistant",
+            "text": result["assistant_text"]
+        })
+
+    # Send TTS audio if available
+    if result.get("audio"):
+        await websocket.send_json({"type": "state", "state": "speaking"})
+        await websocket.send_json({
+            "type": "audio",
+            "data": result["audio"]
+        })
+
+    await websocket.send_json({"type": "state", "state": "idle"})
+
+
 @app.websocket("/ws/ai")
 async def ai_websocket(websocket: WebSocket):
     """AI voice control WebSocket."""
     await websocket.accept()
+
+    session = None
+    last_message_time = 0.0
 
     try:
         # Import AI session lazily
@@ -350,9 +406,18 @@ async def ai_websocket(websocket: WebSocket):
             from ai_session import AISession
             session = AISession(robot)
         except ImportError as e:
+            print(f"AI import error: {e}")
             await websocket.send_json({
                 "type": "error",
-                "message": f"AI mode not available: {e}"
+                "message": "AI not available - missing dependencies"
+            })
+            await websocket.close()
+            return
+        except Exception as e:
+            print(f"AI init error: {e}")
+            await websocket.send_json({
+                "type": "error",
+                "message": "AI initialization failed"
             })
             await websocket.close()
             return
@@ -362,46 +427,78 @@ async def ai_websocket(websocket: WebSocket):
         while True:
             data = await websocket.receive_json()
 
+            # Rate limiting
+            current_time = time.time()
+            if current_time - last_message_time < MIN_MESSAGE_INTERVAL:
+                await websocket.send_json({
+                    "type": "error",
+                    "message": "Rate limit exceeded"
+                })
+                continue
+            last_message_time = current_time
+
             if data.get("type") == "start_listening":
                 await websocket.send_json({"type": "state", "state": "listening"})
 
             elif data.get("type") == "audio":
-                await websocket.send_json({"type": "state", "state": "thinking"})
-
-                # Process audio with AI
-                try:
-                    result = await session.process_audio(data["data"])
-
-                    # Send transcript
-                    if result.get("user_text"):
-                        await websocket.send_json({
-                            "type": "transcript",
-                            "role": "user",
-                            "text": result["user_text"]
-                        })
-
-                    if result.get("assistant_text"):
-                        await websocket.send_json({
-                            "type": "transcript",
-                            "role": "assistant",
-                            "text": result["assistant_text"]
-                        })
-
-                    # Send TTS audio if available
-                    if result.get("audio"):
-                        await websocket.send_json({"type": "state", "state": "speaking"})
-                        await websocket.send_json({
-                            "type": "audio",
-                            "data": result["audio"]
-                        })
-
-                except Exception as e:
+                # Validate audio size
+                audio_data = data.get("data", "")
+                if len(audio_data) > MAX_AUDIO_SIZE:
                     await websocket.send_json({
                         "type": "error",
-                        "message": str(e)
+                        "message": "Audio too large"
                     })
+                    await websocket.send_json({"type": "state", "state": "idle"})
+                    continue
 
-                await websocket.send_json({"type": "state", "state": "idle"})
+                # Validate MIME type
+                mime_type = data.get("mimeType", "audio/webm")
+                if mime_type not in ALLOWED_AUDIO_TYPES:
+                    mime_type = "audio/webm"
+
+                await websocket.send_json({"type": "state", "state": "thinking"})
+
+                try:
+                    result = await session.process_audio(audio_data, mime_type=mime_type)
+                    await send_ai_response(websocket, result)
+                except Exception as e:
+                    print(f"AI processing error: {e}")
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": "AI processing failed"
+                    })
+                    await websocket.send_json({"type": "state", "state": "idle"})
+
+            elif data.get("type") == "text":
+                text = data.get("text", "").strip()
+
+                # Validate text input
+                if not text:
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": "Empty text message"
+                    })
+                    continue
+
+                if len(text) > MAX_TEXT_LENGTH:
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": f"Text too long (max {MAX_TEXT_LENGTH} chars)"
+                    })
+                    continue
+
+                await websocket.send_json({"type": "state", "state": "thinking"})
+
+                try:
+                    result = await session.process_text(text, generate_tts=True)
+                    await send_ai_response(websocket, result, user_text=text)
+                except Exception as e:
+                    print(f"AI text processing error: {e}")
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": "AI processing failed"
+                    })
+                    await websocket.send_json({"type": "state", "state": "idle"})
 
     except WebSocketDisconnect:
         pass

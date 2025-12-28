@@ -157,7 +157,27 @@ class mywindow(QMainWindow, Ui_server_ui):
                     self.queue_led.put(msg)                      # Put LED commands into the LED queue
                 else:
                     if self.cmd_parser.commandString == self.command.CMD_SONIC:
-                        pass                                                        # Placeholder for sonic commands
+                        # Respond with current ultrasonic distance reading
+                        distance = self.car.sonic.get_distance()
+                        if self.tcp_server.get_cmd_server_busy() == False:
+                            self.tcp_server.set_cmd_server_busy(True)
+                            self.tcp_server.sendDataToCmdClinet("CMD_SONIC#{:.2f}\r\n".format(distance))
+                            self.tcp_server.set_cmd_server_busy(False)
+                    elif self.cmd_parser.commandString == self.command.CMD_INFRARED:
+                        # Respond with current infrared sensor readings (line following)
+                        infrared_value = self.car.infrared.read_all_infrared()
+                        if self.tcp_server.get_cmd_server_busy() == False:
+                            self.tcp_server.set_cmd_server_busy(True)
+                            self.tcp_server.sendDataToCmdClinet("CMD_INFRARED#{}\r\n".format(infrared_value))
+                            self.tcp_server.set_cmd_server_busy(False)
+                    elif self.cmd_parser.commandString == self.command.CMD_LIDAR:
+                        # Respond with current LiDAR distance reading
+                        with self._lidar_lock:
+                            lidar_dist = self._lidar_distance
+                        if self.tcp_server.get_cmd_server_busy() == False:
+                            self.tcp_server.set_cmd_server_busy(True)
+                            self.tcp_server.sendDataToCmdClinet("CMD_LIDAR#{}\r\n".format(lidar_dist))
+                            self.tcp_server.set_cmd_server_busy(False)
                     elif self.cmd_parser.commandString == self.command.CMD_SERVO:
                         if self.car_mode == 1 or self.car_mode == 2:   
                             servo_index = int(self.cmd_parser.intParameter[0])      # Get the servo index
@@ -219,18 +239,27 @@ class mywindow(QMainWindow, Ui_server_ui):
     def threading_car_task(self):
         while self.car_thread_is_running:
             if self.car_mode == 1:
-                distance = self.car.sonic.get_distance()
+                # Stream all sensors in manual/move mode
                 if self.tcp_server.get_cmd_server_busy() == False:
                     self.tcp_server.set_cmd_server_busy(True)
-                    self.tcp_server.sendDataToCmdClinet("CMD_SONIC#{:.2f}".format(distance))
+                    # Ultrasonic
+                    distance = self.car.sonic.get_distance()
+                    self.tcp_server.sendDataToCmdClinet("CMD_SONIC#{:.2f}\r\n".format(distance))
+                    # Infrared (line following)
+                    infrared_value = self.car.infrared.read_all_infrared()
+                    self.tcp_server.sendDataToCmdClinet("CMD_INFRARED#{}\r\n".format(infrared_value))
+                    # LiDAR
+                    with self._lidar_lock:
+                        lidar_dist = self._lidar_distance
+                    self.tcp_server.sendDataToCmdClinet("CMD_LIDAR#{}\r\n".format(lidar_dist))
                     self.tcp_server.set_cmd_server_busy(False)
-                time.sleep(1)                                                     # Sleep for 0.1 seconds if the car mode is 1
+                time.sleep(0.5)  # Stream at 2Hz for all sensors
             elif self.car_mode == 2:
                 self.car.mode_ultrasonic()                                        # Set the car mode to ultrasonic
                 distance = self.car.sonic.get_distance()
                 if self.tcp_server.get_cmd_server_busy() == False:
                     self.tcp_server.set_cmd_server_busy(True)
-                    self.tcp_server.sendDataToCmdClinet("CMD_SONIC#{:.2f}".format(distance))
+                    self.tcp_server.sendDataToCmdClinet("CMD_SONIC#{:.2f}\r\n".format(distance))
                     self.tcp_server.set_cmd_server_busy(False)
             elif self.car_mode == 3:
                 self.car.mode_infrared()                                          # Set the car mode to infrared
